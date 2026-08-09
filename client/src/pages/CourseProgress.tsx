@@ -219,6 +219,14 @@ export default function CourseProgress() {
                             <div className="flex items-center gap-2 text-xs" style={{ color: "oklch(0.40 0.025 240)" }}>
                               <Eye className="w-3 h-3" style={{ color: "oklch(0.35 0.13 245)" }} />
                               <span>督导：{ev.supervisor?.name || "未知"}</span>
+                              {ev.actualWeek && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded font-medium"
+                                  style={{ background: "oklch(0.92 0.03 245)", color: "oklch(0.35 0.13 245)" }}
+                                >
+                                  第{ev.actualWeek}周
+                                </span>
+                              )}
                               {ev.overallScore && (
                                 <span className="flex items-center gap-0.5">
                                   {Array.from({ length: 5 }).map((_, i) => (
@@ -228,7 +236,9 @@ export default function CourseProgress() {
                               )}
                             </div>
                             <span className="text-xs" style={{ color: "oklch(0.65 0.02 240)" }}>
-                              {formatDateOnlyBJ(ev.createdAt)}
+                              {ev.listenDate
+                                ? `听课 ${formatDateOnlyBJ(ev.listenDate)}`
+                                : `评价 ${formatDateOnlyBJ(ev.createdAt)}`}
                             </span>
                           </div>
                         ))}

@@ -623,6 +623,10 @@ export async function getCourseEvaluationProgress(college?: string) {
       overallScore: courseEvaluations.overallScore,
       status: courseEvaluations.status,
       createdAt: courseEvaluations.createdAt,
+      // 听课周次与听课日期：用于区分同一门课被听过的不同场次
+      // （createdAt 是评价提交时间，不能代表实际听课时间）
+      actualWeek: courseEvaluations.actualWeek,
+      listenDate: courseEvaluations.listenDate,
     })
     .from(courseEvaluations)
     .where(and(inArray(courseEvaluations.courseId, courseIds), eq(courseEvaluations.status, "submitted")));
