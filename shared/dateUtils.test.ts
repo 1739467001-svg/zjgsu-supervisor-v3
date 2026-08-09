@@ -58,10 +58,11 @@ describe("dateUtils", () => {
     });
 
     it("应该计算第二周的日期范围", () => {
+      // 学期第 1 周为 03-02(周一) ~ 03-08(周日)，故第 2 周为 03-09 ~ 03-15
       const range = calculateDateRangeFromWeek(2);
       expect(range).toEqual({
-        startDate: "2026-03-08",
-        endDate: "2026-03-14",
+        startDate: "2026-03-09",
+        endDate: "2026-03-15",
       });
     });
 
@@ -85,8 +86,13 @@ describe("dateUtils", () => {
       expect(isValidFutureDate("2026-03-09")).toBe(true);
     });
 
-    it("应该拒绝过去的日期", () => {
-      expect(isValidFutureDate("2026-03-07")).toBe(false);
+    // 督导是"听完课之后"才填评价，可能隔几天补填，
+    // 因此学期范围内的过去日期必须允许选择（v2 起已放开该限制）
+    it("应该接受学期范围内的过去日期", () => {
+      expect(isValidFutureDate("2026-03-07")).toBe(true);
+    });
+
+    it("应该拒绝学期开始之前的日期", () => {
       expect(isValidFutureDate("2026-03-01")).toBe(false);
     });
 
@@ -101,8 +107,9 @@ describe("dateUtils", () => {
   });
 
   describe("getMinSelectableDate", () => {
-    it("应该返回今天的日期", () => {
-      expect(getMinSelectableDate()).toBe("2026-03-08");
+    // 最小可选日期是"学期第一天"而非"今天"，以便补填本学期内已听过的课
+    it("应该返回学期第一天", () => {
+      expect(getMinSelectableDate()).toBe(SEMESTER_START_DATE);
     });
   });
 
