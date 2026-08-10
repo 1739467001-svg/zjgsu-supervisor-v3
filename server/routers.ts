@@ -31,6 +31,7 @@ import {
   markNotificationRead,
   updateEvaluation,
   updateListeningPlanStatus,
+  markListeningPlanCompleted,
   updateUserPassword,
   updateUserRole,
   upsertUser,
@@ -275,6 +276,14 @@ export const appRouter = router({
 
       // 如果提交评价，发送通知
       if (input.status === "submitted" && evaluation) {
+        // 同步听课计划状态，避免已评价的课程仍停留在「待听课」列表
+        await markListeningPlanCompleted({
+          supervisorId: ctx.user!.id,
+          courseId: input.courseId,
+          planId: input.planId,
+          actualWeek: input.actualWeek,
+        });
+
         // 通知研究生院主管
         const admins = await getUsersByRole("graduate_admin");
         for (const admin of admins) {
@@ -311,7 +320,12 @@ export const appRouter = router({
     }),
 
     update: supervisorProcedure
-      .input(z.object({ id: z.number(), data: evaluationSchema }))
+      .input(z.object({
+        id: z.number(),
+        data: evaluationSchema,
+        // 标记本次请求来自 30 秒一次的后台自动保存，而非用户主动点击
+        autoSave: z.boolean().optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
         const existing = await getEvaluationById(input.id);
         if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
@@ -320,10 +334,27 @@ export const appRouter = router({
         }
         await ensureCourseExists(input.data.courseId);
 
+        // 自动保存只负责持久化内容，绝不改变评价状态。
+        // 修复：已提交的评价被打开查看超过 30 秒后，会被自动保存悄悄改回草稿，
+        // 督导必须重新提交一次（会议反馈问题）。
+        // 自动保存一律沿用记录当前状态：草稿保持草稿，已提交保持已提交
+        const nextStatus = input.autoSave === true ? existing.status : input.data.status;
+
         await updateEvaluation(input.id, {
           ...input.data,
+          status: nextStatus,
           listenDate: input.data.listenDate ? new Date(input.data.listenDate) : undefined,
         });
+
+        // 由草稿转为已提交时，同步把听课计划标记为已评价
+        if (nextStatus === "submitted" && existing.status !== "submitted") {
+          await markListeningPlanCompleted({
+            supervisorId: existing.supervisorId,
+            courseId: input.data.courseId,
+            planId: input.data.planId ?? existing.planId,
+            actualWeek: input.data.actualWeek ?? existing.actualWeek,
+          });
+        }
         return { success: true };
       }),
 

@@ -323,6 +323,68 @@ export async function updateListeningPlanStatus(planId: number, status: "pending
   await db.update(listeningPlans).set({ status }).where(eq(listeningPlans.id, planId));
 }
 
+/**
+ * 评价提交后，把对应的听课计划标记为「已评价」
+ *
+ * 背景：原先提交评价不会回写听课计划状态，导致课程已评价但仍停留在
+ * 「待听课」列表中（会议反馈问题）。
+ *
+ * 匹配优先级，逐级收窄以避免误标记同一课程的其它周次计划：
+ *   1) 有 planId —— 精确定位该计划
+ *   2) 有听课周次 —— 匹配 督导 + 课程 + 该周次 的待听课计划
+ *   3) 都没有 —— 仅当该督导对该课程只剩一条待听课计划时才标记
+ */
+export async function markListeningPlanCompleted(params: {
+  supervisorId: number;
+  courseId: number;
+  planId?: number | null;
+  actualWeek?: number | null;
+}) {
+  const db = await getDb();
+  if (!db) return;
+
+  // 1) 精确匹配：限定 supervisorId，防止越权改动他人计划
+  if (params.planId) {
+    await db
+      .update(listeningPlans)
+      .set({ status: "completed" })
+      .where(
+        and(
+          eq(listeningPlans.id, params.planId),
+          eq(listeningPlans.supervisorId, params.supervisorId)
+        )
+      );
+    return;
+  }
+
+  const baseConditions = [
+    eq(listeningPlans.supervisorId, params.supervisorId),
+    eq(listeningPlans.courseId, params.courseId),
+    eq(listeningPlans.status, "pending"),
+  ];
+
+  // 2) 按听课周次匹配
+  if (params.actualWeek != null) {
+    await db
+      .update(listeningPlans)
+      .set({ status: "completed" })
+      .where(and(...baseConditions, eq(listeningPlans.planWeek, params.actualWeek)));
+    return;
+  }
+
+  // 3) 无周次信息：只有唯一一条待听课计划时才标记，避免误伤其它周次
+  const pending = await db
+    .select({ id: listeningPlans.id })
+    .from(listeningPlans)
+    .where(and(...baseConditions));
+  if (pending.length === 1) {
+    await db
+      .update(listeningPlans)
+      .set({ status: "completed" })
+      .where(eq(listeningPlans.id, pending[0].id));
+  }
+}
+
 export async function deleteListeningPlan(planId: number) {
   const db = await getDb();
   if (!db) return;

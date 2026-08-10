@@ -322,8 +322,10 @@ export default function EvaluationForm() {
         setAutoSaveStatus('idle');
         return;
       }
-      const payload = { ...currentForm, courseId: resolvedCourseId, status: 'draft' as const };
-      autoSaveMutation.mutate({ id: actualEvalId, data: payload as any });
+      // 自动保存只持久化内容，不携带 status：由后端沿用记录当前状态。
+      // 原先固定发送 status:'draft'，会把已提交的评价悄悄改回草稿。
+      const payload = { ...currentForm, courseId: resolvedCourseId, status: undefined };
+      autoSaveMutation.mutate({ id: actualEvalId, data: payload as any, autoSave: true });
     }, 30000);
     
     return () => clearInterval(autoSaveInterval);
