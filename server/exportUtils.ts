@@ -105,7 +105,82 @@ function createUniqueExcelSheetName(name: string, usedNames: Set<string>): strin
 }
 
 // ============================================================
-// Excel 导出：按专业分类（每个专业一个 Sheet）
+// 督导角色中文名
+// 全部记录合并到一张表后，需要一列标明「这条记录是谁、以什么身份听的」。
+// 后续新增院级督导、学院分管领导等角色时，在此补充即可。
+// ============================================================
+const ROLE_LABELS: Record<string, string> = {
+  supervisor_expert: "督导专家",
+  supervisor_leader: "督导组长",
+  college_secretary: "学院教学秘书",
+  graduate_admin: "研究生院主管",
+  admin: "系统管理员",
+  user: "普通用户",
+};
+
+export function getRoleLabel(role?: string | null): string {
+  if (!role) return "—";
+  return ROLE_LABELS[role] || role;
+}
+
+/**
+ * 导出列定义：标签、列宽、取值三者绑定在一起声明。
+ * 原实现用两个平行数组分别维护列和列宽，改动时极易错位。
+ */
+type ExportColumn = {
+  label: string;
+  width: number;
+  value: (ev: EvaluationExportData) => string | number;
+};
+
+function buildExportColumns(): ExportColumn[] {
+  const course = (ev: EvaluationExportData) => (ev as any).course || {};
+  const supervisor = (ev: EvaluationExportData) => (ev as any).supervisor || {};
+
+  return [
+    { label: "课程名称", width: 22, value: (ev) => course(ev).courseName || "—" },
+    { label: "主讲教师", width: 12, value: (ev) => course(ev).teacher || "—" },
+    { label: "所属学院", width: 18, value: (ev) => course(ev).college || "—" },
+    // 会议要求新增：原先专业是 Sheet 名，合表后必须落为独立字段才能筛选
+    { label: "学生专业", width: 28, value: (ev) => course(ev).studentMajor || "—" },
+    { label: "课程性质", width: 12, value: (ev) => course(ev).courseType || "—" },
+    { label: "校区", width: 10, value: (ev) => course(ev).campus || "—" },
+    { label: "班级编号", width: 14, value: (ev) => course(ev).classId || "—" },
+    { label: "教室", width: 14, value: (ev) => course(ev).classroom || "—" },
+    {
+      label: "上课时间",
+      width: 14,
+      value: (ev) => `${course(ev).weekday || ""} ${course(ev).period || ""}`.trim() || "—",
+    },
+    { label: "学生人数", width: 10, value: (ev) => course(ev).studentCount || "—" },
+    { label: "督导专家", width: 12, value: (ev) => supervisor(ev).name || "—" },
+    // 会议要求新增：需区分校级督导、院级督导、分管领导等不同身份
+    { label: "督导角色", width: 16, value: (ev) => getRoleLabel(supervisor(ev).role) },
+    {
+      label: "听课日期",
+      width: 12,
+      value: (ev) => (ev.listenDate ? formatDateOnlyBJ(ev.listenDate) : "—"),
+    },
+    { label: "听课周次", width: 10, value: (ev) => (ev.actualWeek ? `第${ev.actualWeek}周` : "—") },
+    { label: "综合评分", width: 10, value: (ev) => ev.overallScore || "—" },
+    ...SCORE_COLUMNS.map((col) => ({
+      label: col.label,
+      width: 14,
+      value: (ev: EvaluationExportData) => (ev as any)[col.key] || "—",
+    })),
+    { label: "教学亮点", width: 30, value: (ev) => ev.highlights || "—" },
+    { label: "不足与建议", width: 30, value: (ev) => ev.suggestions || "—" },
+    { label: "综合改进建议", width: 30, value: (ev) => ev.improvement_suggestion || "—" },
+    { label: "发展与支持建议", width: 30, value: (ev) => ev.development_suggestion || "—" },
+  ];
+}
+
+// ============================================================
+// Excel 导出：全部记录合并在一张表
+//
+// 原先按学生专业拆成多个 Sheet，铺开到全校后专业数量巨大，
+// 报表无法使用。会议要求合并为一张表，并补充「学生专业」与
+// 「督导角色」两列，由使用者在 Excel 中自行筛选。
 // ============================================================
 export function generateEvaluationExcel(evaluations: EvaluationExportData[]): Buffer {
   const workbook = XLSX.utils.book_new();
@@ -114,98 +189,38 @@ export function generateEvaluationExcel(evaluations: EvaluationExportData[]): Bu
   // 只导出已提交的评价
   const submitted = evaluations.filter((e) => e.status === "submitted");
 
-  // 按学生专业分组
-  const majorMap = new Map<string, EvaluationExportData[]>();
-  for (const ev of submitted) {
-    const major = (ev as any).course?.studentMajor || "未分类专业";
-    if (!majorMap.has(major)) majorMap.set(major, []);
-    majorMap.get(major)!.push(ev);
-  }
-
-  // 如果没有数据，创建空表
-  if (majorMap.size === 0) {
+  if (submitted.length === 0) {
     const ws = XLSX.utils.aoa_to_sheet([["暂无已提交的评价数据"]]);
     XLSX.utils.book_append_sheet(workbook, ws, createUniqueExcelSheetName("无数据", usedSheetNames));
     return XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
   }
 
-  // 为每个专业创建一个 Sheet
-  for (const [major, evals] of majorMap) {
-    const rows = evals.map((ev) => {
-      const c = (ev as any).course || {};
-      const s = (ev as any).supervisor || {};
-      const row: Record<string, any> = {
-        "课程名称": c.courseName || "—",
-        "主讲教师": c.teacher || "—",
-        "所属学院": c.college || "—",
-        "课程性质": c.courseType || "—",
-        "校区": c.campus || "—",
-        "班级编号": c.classId || "—",
-        "教室": c.classroom || "—",
-        "上课时间": `${c.weekday || ""} ${c.period || ""}`.trim() || "—",
-        "学生人数": c.studentCount || "—",
-        "督导专家": s.name || "—",
-        "听课日期": ev.listenDate ? formatDateOnlyBJ(ev.listenDate) : "—",
-        "实际周次": ev.actualWeek ? `第${ev.actualWeek}周` : "—",
-        "综合评分": ev.overallScore || "—",
-      };
-      // 添加所有评分维度列
-      for (const col of SCORE_COLUMNS) {
-        row[col.label] = (ev as any)[col.key] || "—";
-      }
-      // 文字评价
-      row["教学亮点"] = ev.highlights || "—";
-      row["不足与建议"] = ev.suggestions || "—";
-      row["综合改进建议"] = ev.improvement_suggestion || "—";
-      row["发展与支持建议"] = ev.development_suggestion || "—";
-      return row;
-    });
+  const columns = buildExportColumns();
 
-    const ws = XLSX.utils.json_to_sheet(rows);
-
-    // 设置列宽
-    const colWidths: { wch: number }[] = [
-      { wch: 22 }, // 课程名称
-      { wch: 12 }, // 主讲教师
-      { wch: 18 }, // 所属学院
-      { wch: 12 }, // 课程性质
-      { wch: 10 }, // 校区
-      { wch: 14 }, // 班级编号
-      { wch: 14 }, // 教室
-      { wch: 14 }, // 上课时间
-      { wch: 10 }, // 学生人数
-      { wch: 12 }, // 督导专家
-      { wch: 12 }, // 听课日期
-      { wch: 10 }, // 实际周次
-      { wch: 10 }, // 综合评分
-    ];
-    // 评分列
-    for (let i = 0; i < SCORE_COLUMNS.length; i++) {
-      colWidths.push({ wch: 14 });
-    }
-    // 文字评价列
-    colWidths.push({ wch: 30 }, { wch: 30 }, { wch: 30 }, { wch: 30 });
-    ws["!cols"] = colWidths;
-
-    const sheetName = createUniqueExcelSheetName(major, usedSheetNames);
-    XLSX.utils.book_append_sheet(workbook, ws, sheetName);
-  }
-
-  // 添加汇总 Sheet
-  const summaryRows = Array.from(majorMap.entries()).map(([major, evals]) => {
-    const scores = evals.filter((e) => e.overallScore).map((e) => e.overallScore!);
-    const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2) : "—";
-    return {
-      "专业": major,
-      "评价总数": evals.length,
-      "平均综合评分": avgScore,
-      "最高分": scores.length > 0 ? Math.max(...scores).toFixed(1) : "—",
-      "最低分": scores.length > 0 ? Math.min(...scores).toFixed(1) : "—",
-    };
+  // 按学院、专业、课程名排序，便于人工浏览；筛选仍由 Excel 完成
+  const sorted = [...submitted].sort((a, b) => {
+    const ca = (a as any).course || {};
+    const cb = (b as any).course || {};
+    return (
+      String(ca.college || "").localeCompare(String(cb.college || ""), "zh-CN") ||
+      String(ca.studentMajor || "").localeCompare(String(cb.studentMajor || ""), "zh-CN") ||
+      String(ca.courseName || "").localeCompare(String(cb.courseName || ""), "zh-CN")
+    );
   });
-  const summaryWs = XLSX.utils.json_to_sheet(summaryRows);
-  summaryWs["!cols"] = [{ wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 10 }];
-  XLSX.utils.book_append_sheet(workbook, summaryWs, createUniqueExcelSheetName("专业汇总", usedSheetNames));
+
+  const rows = sorted.map((ev) => {
+    const row: Record<string, any> = {};
+    for (const col of columns) {
+      row[col.label] = col.value(ev);
+    }
+    return row;
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows, { header: columns.map((c) => c.label) });
+  ws["!cols"] = columns.map((c) => ({ wch: c.width }));
+  // 冻结表头行，长表格滚动时列名始终可见
+  ws["!freeze"] = { xSplit: "0", ySplit: "1" };
+  XLSX.utils.book_append_sheet(workbook, ws, createUniqueExcelSheetName("督导评价记录", usedSheetNames));
 
   return XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
 }

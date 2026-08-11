@@ -451,16 +451,18 @@ export const appRouter = router({
       .input(z.object({ college: z.string().optional() }))
       .mutation(async ({ input, ctx }) => {
         const user = ctx.user!;
-        // 权限：研究生院主管/admin 可导出全部，学院教学秘书只能导出本学院
-        if (!["graduate_admin", "admin", "college_secretary"].includes(user.role || "")) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "无导出权限" });
-        }
-
+        // 权限与 exportToExcel 保持一致：
+        // 督导专家只导出自己的评价，学院秘书限本学院，主管/admin 可导出全部。
+        // （原先督导专家被拒，导致督导端无法导出——会议要求「增加导出功能，同管理端」）
         let evaluations;
-        if (user.role === "college_secretary") {
+        if (user.role === "supervisor_expert") {
+          evaluations = await getEvaluationsBySupervisor(user.id);
+        } else if (user.role === "college_secretary") {
           evaluations = await getAllEvaluations({ college: user.college || undefined });
-        } else {
+        } else if (["supervisor_leader", "graduate_admin", "admin"].includes(user.role || "")) {
           evaluations = await getAllEvaluations({ college: input.college });
+        } else {
+          throw new TRPCError({ code: "FORBIDDEN", message: "无导出权限" });
         }
 
         const allUsers = await getAllUsers();

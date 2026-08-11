@@ -28,7 +28,8 @@ export default function EvaluationList() {
   const role = user?.role || "user";
   const canEdit = ["supervisor_expert", "supervisor_leader", "admin"].includes(role);
   const canViewAll = ["supervisor_leader", "graduate_admin", "admin"].includes(role);
-  const canExport = ["graduate_admin", "admin", "college_secretary"].includes(role);
+  // 督导专家/组长也可导出（导出范围由后端按角色限定为本人或本学院）
+  const canExport = ["graduate_admin", "admin", "college_secretary", "supervisor_expert", "supervisor_leader"].includes(role);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
