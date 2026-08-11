@@ -40,7 +40,6 @@ const STATUS_MAP = {
 
 export default function MyPlans() {
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState<"pending" | "completed" | "cancelled" | "all">("pending");
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const utils = trpc.useUtils();
 
@@ -62,26 +61,10 @@ export default function MyPlans() {
     onError: (err) => toast.error(err.message),
   });
 
-  const filteredPlans =
-    plans?.filter((p) => activeTab === "all" || p.status === activeTab) || [];
-
-  const tabs = [
-    {
-      key: "pending",
-      label: "待听课",
-      count: plans?.filter((p) => p.status === "pending").length || 0,
-    },
-    {
-      key: "completed",
-      label: "已评价",
-      count: plans?.filter((p) => p.status === "completed").length || 0,
-    },
-    {
-      key: "all",
-      label: "全部",
-      count: plans?.length || 0,
-    },
-  ];
+  // 听课计划页面只呈现「待听课」，已评价的记录统一归入「评价记录」模块，
+  // 避免同一件事在两处出现不同状态造成混乱（会议反馈）。
+  const filteredPlans = plans?.filter((p) => p.status === "pending") || [];
+  const completedCount = plans?.filter((p) => p.status === "completed").length || 0;
 
   return (
     <DashboardLayout>
@@ -189,44 +172,28 @@ export default function MyPlans() {
         ) : (
           /* ===== 列表视图 ===== */
           <>
-            {/* Tabs */}
-            <div
-              className="flex gap-1 p-1 rounded-lg"
-              style={{ background: "oklch(0.94 0.010 240)" }}
-            >
-              {tabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as any)}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200"
-                  style={{
-                    background:
-                      activeTab === tab.key ? "white" : "transparent",
-                    color:
-                      activeTab === tab.key
-                        ? "oklch(0.35 0.13 245)"
-                        : "oklch(0.52 0.025 240)",
-                    boxShadow:
-                      activeTab === tab.key
-                        ? "0 1px 3px oklch(0.35 0.13 245 / 0.1)"
-                        : "none",
-                  }}
+            {/* 只保留「待听课」，并为已评价记录提供明确入口 */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium" style={{ color: "oklch(0.18 0.025 240)" }}>
+                  待听课
+                </span>
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-xs"
+                  style={{ background: "oklch(0.93 0.018 240)", color: "oklch(0.35 0.13 245)" }}
                 >
-                  {tab.label}
-                  <span
-                    className="px-1.5 py-0.5 rounded-full text-xs"
-                    style={{
-                      background:
-                        activeTab === tab.key
-                          ? "oklch(0.93 0.018 240)"
-                          : "oklch(0.88 0.01 240)",
-                      color: "oklch(0.35 0.13 245)",
-                    }}
-                  >
-                    {tab.count}
-                  </span>
+                  {filteredPlans.length}
+                </span>
+              </div>
+              {completedCount > 0 && (
+                <button
+                  onClick={() => navigate("/evaluations")}
+                  className="flex items-center gap-1 text-xs hover:underline"
+                  style={{ color: "oklch(0.35 0.13 245)" }}
+                >
+                  已评价 {completedCount} 门，前往「评价记录」查看
                 </button>
-              ))}
+              )}
             </div>
 
             {/* 计划列表 */}
@@ -243,20 +210,16 @@ export default function MyPlans() {
                   className="text-sm"
                   style={{ color: "oklch(0.52 0.025 240)" }}
                 >
-                  {activeTab === "pending"
-                    ? "暂无待听课计划，去课程列表添加吧"
-                    : "暂无记录"}
+                  暂无待听课计划，去课程列表添加吧
                 </p>
-                {activeTab === "pending" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => navigate("/courses")}
-                  >
-                    <BookOpen className="w-4 h-4 mr-1.5" />
-                    浏览课程
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate("/courses")}
+                >
+                  <BookOpen className="w-4 h-4 mr-1.5" />
+                  浏览课程
+                </Button>
               </div>
             ) : (
               <div className="space-y-3">
@@ -327,8 +290,10 @@ export default function MyPlans() {
                           </div>
 
                           {course?.college && (
+                            /* 学院全称较长（如「管理工程与电子商务学院（跨境电商学院）」），
+                               手机端不截断，改为换行完整显示 */
                             <p
-                              className="text-xs mt-1.5 truncate"
+                              className="text-xs mt-1.5 break-words"
                               style={{ color: "oklch(0.55 0.02 240)" }}
                             >
                               {course.college}

@@ -258,7 +258,8 @@ export default function EvaluationList() {
 
                       <div className="flex flex-wrap gap-3 text-xs" style={{ color: "oklch(0.52 0.025 240)" }}>
                         {course?.teacher && <span>主讲：{course.teacher}</span>}
-                        {course?.college && <span className="truncate max-w-[200px]">{course.college}</span>}
+                        {/* 不再限制宽度截断，保证学院全称在手机端完整显示 */}
+                        {course?.college && <span className="break-words">{course.college}</span>}
                         {canViewAll && supervisor && <span className="font-medium" style={{ color: "oklch(0.35 0.13 245)" }}>督导：{supervisor.name}</span>}
                       </div>
 

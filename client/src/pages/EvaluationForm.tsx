@@ -499,8 +499,12 @@ export default function EvaluationForm() {
                 {targetCourse?.campus && <span>校区：{targetCourse.campus}</span>}
               </div>
               
-              {/* 课程详细信息网格 */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4" style={{ borderTop: "1px solid oklch(0.93 0.006 240)" }}>
+              {/* 课程详细信息网格
+                  短字段（性质/教室/人数/班号）排在前面并列，
+                  「学生专业」独占整行——研究生课程常有多专业合班，
+                  名称很长，原先与短字段等宽且被 line-clamp 截断，
+                  手机上显示不全（会议反馈）。 */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4" style={{ borderTop: "1px solid oklch(0.93 0.006 240)" }}>
                 {/* 课程性质 */}
                 <div className="space-y-1">
                   <p className="text-xs font-medium" style={{ color: "oklch(0.52 0.025 240)" }}>课程性质</p>
@@ -516,20 +520,8 @@ export default function EvaluationForm() {
                 {/* 教室名称 */}
                 <div className="space-y-1">
                   <p className="text-xs font-medium" style={{ color: "oklch(0.52 0.025 240)" }}>教室名称</p>
-                  <p className="text-xs" style={{ color: "oklch(0.20 0.025 240)" }}>
+                  <p className="text-xs break-words" style={{ color: "oklch(0.20 0.025 240)" }}>
                     {targetCourse?.classroom || "—"}
-                  </p>
-                </div>
-
-                {/* 学生专业 */}
-                <div className="space-y-1">
-                  <p className="text-xs font-medium" style={{ color: "oklch(0.52 0.025 240)" }}>学生专业</p>
-                  <p className="text-xs" style={{ color: "oklch(0.20 0.025 240)" }}>
-                    {targetCourse?.studentMajor ? (
-                      <span className="line-clamp-2">{targetCourse.studentMajor}</span>
-                    ) : (
-                      "—"
-                    )}
                   </p>
                 </div>
 
@@ -544,8 +536,16 @@ export default function EvaluationForm() {
                 {/* 班级编号 */}
                 <div className="space-y-1">
                   <p className="text-xs font-medium" style={{ color: "oklch(0.52 0.025 240)" }}>班级编号</p>
-                  <p className="text-xs" style={{ color: "oklch(0.20 0.025 240)" }}>
+                  <p className="text-xs break-words" style={{ color: "oklch(0.20 0.025 240)" }}>
                     {targetCourse?.classId || "—"}
+                  </p>
+                </div>
+
+                {/* 学生专业：独占整行，完整换行显示，不再截断 */}
+                <div className="space-y-1 col-span-2 sm:col-span-4">
+                  <p className="text-xs font-medium" style={{ color: "oklch(0.52 0.025 240)" }}>学生专业</p>
+                  <p className="text-xs leading-relaxed break-words whitespace-pre-wrap" style={{ color: "oklch(0.20 0.025 240)" }}>
+                    {targetCourse?.studentMajor || "—"}
                   </p>
                 </div>
               </div>
