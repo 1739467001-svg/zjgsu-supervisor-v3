@@ -1,17 +1,8 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { TrendingUp, Users, BookOpen, CheckCircle, Eye, ChevronRight, BarChart3 } from "lucide-react";
-
-const COLORS = [
-  "oklch(0.35 0.13 245)", "oklch(0.52 0.16 200)", "oklch(0.62 0.14 160)",
-  "oklch(0.72 0.14 85)", "oklch(0.62 0.16 30)", "oklch(0.55 0.14 300)",
-  "oklch(0.65 0.12 120)", "oklch(0.45 0.15 260)", "oklch(0.70 0.13 50)",
-  "oklch(0.50 0.17 180)",
-];
-
-const WEEKDAY_ORDER = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
 
 export default function AdminDashboard() {
   const [, navigate] = useLocation();
@@ -33,27 +24,24 @@ export default function AdminDashboard() {
 
   if (!stats) return null;
 
-  const weekdayData = WEEKDAY_ORDER.map((day) => ({
-    name: day.replace("星期", ""),
-    count: stats.evalByWeekday.find((d) => d.weekday === day)?.count || 0,
-  }));
+  // 两张图表共用同一份 collegeStats，且不再截断。
+  // 原先一张 slice(0,12)、另一张 slice(0,8)，是「学院数量对不上」的直接原因。
+  const shortName = (name: string, max: number) =>
+    name.length > max ? name.slice(0, max) + "…" : name;
 
-  const collegeBarData = stats.evalByCollege.slice(0, 12).map((c) => ({
-    name: (c.college || "").length > 8 ? (c.college || "").slice(0, 8) + "…" : (c.college || ""),
+  const collegeBarData = stats.collegeStats.map((c) => ({
+    name: shortName(c.college || "", 8),
     fullName: c.college,
     count: c.count,
   }));
 
-  const avgScoreData = stats.avgScoreByCollege.slice(0, 8).map((c) => ({
-    name: (c.college || "").length > 6 ? (c.college || "").slice(0, 6) + "…" : (c.college || ""),
-    score: parseFloat(c.avgScore),
-    count: c.count,
-  }));
-
-  const pieData = stats.evalByCollege.slice(0, 8).map((c, i) => ({
-    name: (c.college || "").length > 6 ? (c.college || "").slice(0, 6) + "…" : (c.college || ""),
-    value: c.count,
-    color: COLORS[i % COLORS.length],
+  // 无评分数据的学院保留在横轴上（score 为 null，图上呈现为空缺），
+  // 保证与上一张图的学院清单完全一致
+  const avgScoreData = stats.collegeStats.map((c) => ({
+    name: shortName(c.college || "", 8),
+    fullName: c.college,
+    score: c.avgScore,
+    count: c.scoredCount,
   }));
 
   return (
@@ -70,7 +58,7 @@ export default function AdminDashboard() {
             { label: "全校课程总数", value: stats.totalCourses, icon: <BookOpen className="w-5 h-5" />, color: "oklch(0.35 0.13 245)", bg: "oklch(0.93 0.018 240)" },
             { label: "已完成督导评价", value: stats.totalEvaluations, icon: <CheckCircle className="w-5 h-5" />, color: "oklch(0.42 0.14 160)", bg: "oklch(0.93 0.018 160)" },
             { label: "督导专家人数", value: stats.totalSupervisors, icon: <Users className="w-5 h-5" />, color: "oklch(0.52 0.16 200)", bg: "oklch(0.93 0.018 200)" },
-            { label: "已覆盖学院数", value: stats.evalByCollege.length, icon: <TrendingUp className="w-5 h-5" />, color: "oklch(0.55 0.14 85)", bg: "oklch(0.95 0.02 85)" },
+            { label: "已覆盖学院数", value: `${stats.coveredCollegeCount} / ${stats.collegeStats.length}`, icon: <TrendingUp className="w-5 h-5" />, color: "oklch(0.55 0.14 85)", bg: "oklch(0.95 0.02 85)" },
           ].map((stat) => (
             <div key={stat.label} className="bg-white rounded-xl p-5 relative overflow-hidden" style={{ border: "1px solid oklch(0.90 0.01 240)" }}>
               <div className="absolute top-0 left-0 right-0 h-0.5" style={{ background: stat.color }} />
@@ -83,14 +71,20 @@ export default function AdminDashboard() {
           ))}
         </div>
 
-        {/* 图表区 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* 各学院督导次数柱状图 */}
+        {/* 图表区：按会议要求仅保留两张核心报表，
+            且两张共用同一份学院清单，数量必然一致 */}
+        <div className="grid grid-cols-1 gap-5">
+          {/* 各学院评价数量分布（含尚无评价的学院） */}
           <div className="bg-white rounded-xl p-5" style={{ border: "1px solid oklch(0.90 0.01 240)" }}>
-            <h3 className="text-sm font-semibold mb-4" style={{ color: "oklch(0.18 0.025 240)" }}>各学院督导评价次数</h3>
+            <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+              <h3 className="text-sm font-semibold" style={{ color: "oklch(0.18 0.025 240)" }}>各学院评价数量分布</h3>
+              <span className="text-xs" style={{ color: "oklch(0.52 0.025 240)" }}>
+                共 {stats.collegeStats.length} 个学院，合计 {stats.totalEvaluations} 条评价
+              </span>
+            </div>
             {collegeBarData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={collegeBarData} margin={{ top: 5, right: 10, left: -20, bottom: 60 }}>
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={collegeBarData} margin={{ top: 5, right: 10, left: -20, bottom: 90 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.93 0.006 240)" />
                   <XAxis dataKey="name" tick={{ fontSize: 10, fill: "oklch(0.52 0.025 240)" }} angle={-35} textAnchor="end" interval={0} />
                   <YAxis tick={{ fontSize: 10, fill: "oklch(0.52 0.025 240)" }} />
@@ -103,63 +97,34 @@ export default function AdminDashboard() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex items-center justify-center h-[260px]" style={{ color: "oklch(0.65 0.02 240)" }}>
+              <div className="flex items-center justify-center h-[340px]" style={{ color: "oklch(0.65 0.02 240)" }}>
                 <p className="text-sm">暂无数据</p>
               </div>
             )}
           </div>
 
-          {/* 学院占比饼图 */}
+          {/* 整体评分概况：学院清单与上图完全一致 */}
           <div className="bg-white rounded-xl p-5" style={{ border: "1px solid oklch(0.90 0.01 240)" }}>
-            <h3 className="text-sm font-semibold mb-4" style={{ color: "oklch(0.18 0.025 240)" }}>督导评价学院分布</h3>
-            {pieData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={2} dataKey="value">
-                    {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value) => [`${value} 次`, "督导次数"]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-[260px]" style={{ color: "oklch(0.65 0.02 240)" }}>
-                <p className="text-sm">暂无数据</p>
-              </div>
-            )}
-          </div>
-
-          {/* 按星期分布 */}
-          <div className="bg-white rounded-xl p-5" style={{ border: "1px solid oklch(0.90 0.01 240)" }}>
-            <h3 className="text-sm font-semibold mb-4" style={{ color: "oklch(0.18 0.025 240)" }}>督导评价星期分布</h3>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={weekdayData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.93 0.006 240)" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: "oklch(0.52 0.025 240)" }} />
-                <YAxis tick={{ fontSize: 11, fill: "oklch(0.52 0.025 240)" }} />
-                <Tooltip formatter={(value) => [`${value} 次`, "督导次数"]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                <Bar dataKey="count" fill="oklch(0.52 0.16 200)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* 各学院平均评分 */}
-          <div className="bg-white rounded-xl p-5" style={{ border: "1px solid oklch(0.90 0.01 240)" }}>
-            <h3 className="text-sm font-semibold mb-4" style={{ color: "oklch(0.18 0.025 240)" }}>各学院平均评分</h3>
+            <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+              <h3 className="text-sm font-semibold" style={{ color: "oklch(0.18 0.025 240)" }}>各学院平均评分</h3>
+              <span className="text-xs" style={{ color: "oklch(0.65 0.02 240)" }}>尚无评价的学院不显示柱形</span>
+            </div>
             {avgScoreData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={avgScoreData} margin={{ top: 5, right: 10, left: -20, bottom: 40 }}>
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={avgScoreData} margin={{ top: 5, right: 10, left: -20, bottom: 90 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.93 0.006 240)" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: "oklch(0.52 0.025 240)" }} angle={-30} textAnchor="end" interval={0} />
+                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: "oklch(0.52 0.025 240)" }} angle={-35} textAnchor="end" interval={0} />
                   <YAxis domain={[0, 5]} tick={{ fontSize: 11, fill: "oklch(0.52 0.025 240)" }} />
-                  <Tooltip formatter={(value) => [`${value} 分`, "平均评分"]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  <Tooltip
+                    formatter={(value: any) => [value == null ? "暂无评分" : `${value} 分`, "平均评分"]}
+                    labelFormatter={(label, payload) => payload?.[0]?.payload?.fullName || label}
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid oklch(0.90 0.01 240)" }}
+                  />
                   <Bar dataKey="score" fill="oklch(0.62 0.14 160)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex items-center justify-center h-[220px]" style={{ color: "oklch(0.65 0.02 240)" }}>
+              <div className="flex items-center justify-center h-[340px]" style={{ color: "oklch(0.65 0.02 240)" }}>
                 <p className="text-sm">暂无评分数据</p>
               </div>
             )}

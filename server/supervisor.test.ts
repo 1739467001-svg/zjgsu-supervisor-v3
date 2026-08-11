@@ -22,6 +22,8 @@ vi.mock("./db", () => ({
     totalCourses: 1344,
     totalEvaluations: 0,
     totalSupervisors: 9,
+    collegeStats: [],
+    coveredCollegeCount: 0,
     evalByCollege: [],
     evalByWeekday: [],
     recentEvals: [],

@@ -496,6 +496,73 @@ async function enrichEvaluations(evals: CourseEvaluation[]) {
 // ============================================================
 // 统计相关（研究生院主管仪表盘）
 // ============================================================
+
+export type CollegeStat = {
+  college: string;
+  count: number;
+  /** 无评分数据时为 null，避免把「没有数据」画成 0 分造成误读 */
+  avgScore: number | null;
+  scoredCount: number;
+};
+
+/**
+ * 合并「全校学院清单」与「按学院聚合的评价数据」
+ *
+ * 保证两条性质，这正是会议反馈「统计数字对不上」的症结：
+ *  1. 零评价的学院同样出现在结果中（count 为 0），
+ *     领导最关心的「哪个学院一条都没评」才看得见；
+ *  2. 各学院 count 之和严格等于已提交评价总数——
+ *     课程已被删除的孤立评价会归入「未知学院」一档，不会凭空消失。
+ *
+ * 抽为纯函数以便直接单元测试，无需连接数据库。
+ */
+export function buildCollegeStats(params: {
+  collegeNames: (string | null)[];
+  aggregates: Array<{ college: string | null; count: unknown; avgScore: unknown; scoredCount: unknown }>;
+  totalSubmitted: number;
+}): CollegeStat[] {
+  const aggregateMap = new Map(
+    params.aggregates.map((r) => [
+      r.college || "",
+      {
+        count: Number(r.count),
+        avgScore: r.avgScore == null ? null : Number(r.avgScore),
+        scoredCount: Number(r.scoredCount),
+      },
+    ])
+  );
+
+  const collegeNames = Array.from(
+    new Set(params.collegeNames.filter((c): c is string => !!c && c.trim() !== ""))
+  );
+
+  const stats: CollegeStat[] = collegeNames
+    .map((college) => {
+      const agg = aggregateMap.get(college);
+      return {
+        college,
+        count: agg?.count ?? 0,
+        avgScore: agg?.avgScore == null ? null : Number(agg.avgScore.toFixed(2)),
+        scoredCount: agg?.scoredCount ?? 0,
+      };
+    })
+    .sort((a, b) => b.count - a.count || a.college.localeCompare(b.college, "zh-CN"));
+
+  // 孤立评价（关联课程已被删除）单独归档，保证求和可对账
+  const joinedSum = stats.reduce((sum, c) => sum + c.count, 0);
+  const orphanCount = params.totalSubmitted - joinedSum;
+  if (orphanCount > 0) {
+    stats.push({
+      college: "未知学院（课程已删除）",
+      count: orphanCount,
+      avgScore: null,
+      scoredCount: 0,
+    });
+  }
+
+  return stats;
+}
+
 export async function getAdminStats() {
   const db = await getDb();
   if (!db) return null;
@@ -504,11 +571,11 @@ export async function getAdminStats() {
     totalCourses,
     totalEvaluations,
     totalSupervisors,
-    evalByCollege,
+    allCollegeRows,
+    collegeAggregates,
     evalByWeekday,
     recentEvals,
     topSupervisors,
-    avgScoreByCollege,
   ] = await Promise.all([
     // 总课程数
     db.select({ count: sql<number>`count(*)` }).from(courses),
@@ -516,17 +583,27 @@ export async function getAdminStats() {
     db.select({ count: sql<number>`count(*)` }).from(courseEvaluations).where(eq(courseEvaluations.status, "submitted")),
     // 督导专家数
     db.select({ count: sql<number>`count(*)` }).from(users).where(inArray(users.role, ["supervisor_expert", "supervisor_leader"] as any[])),
-    // 各学院评价次数
+    // 全校学院清单：包含尚无任何评价的学院
+    // （原先仅从评价表 INNER JOIN 取学院，零评价的学院整个消失，
+    //   导致实际 20 个学院只显示出 8~12 个）
+    db
+      .selectDistinct({ college: courses.college })
+      .from(courses)
+      .where(sql`${courses.college} != ''`),
+    // 各学院「评价次数」与「平均评分」合并为同一次聚合，
+    // 从根本上保证两张图表数据同源、口径一致
     db
       .select({
         college: courses.college,
         count: sql<number>`count(*)`,
+        // SQL 的 AVG 自动忽略 NULL，无需额外过滤条件
+        avgScore: sql<number | null>`AVG(${courseEvaluations.overallScore})`,
+        scoredCount: sql<number>`count(${courseEvaluations.overallScore})`,
       })
       .from(courseEvaluations)
       .innerJoin(courses, eq(courseEvaluations.courseId, courses.id))
       .where(eq(courseEvaluations.status, "submitted"))
-      .groupBy(courses.college)
-      .orderBy(desc(sql`count(*)`)),
+      .groupBy(courses.college),
     // 按星期分布
     db
       .select({
@@ -555,18 +632,6 @@ export async function getAdminStats() {
       .groupBy(courseEvaluations.supervisorId)
       .orderBy(desc(sql`count(*)`))
       .limit(10),
-    // 各学院平均评分
-    db
-      .select({
-        college: courses.college,
-        avgScore: sql<number>`AVG(${courseEvaluations.overallScore})`,
-        count: sql<number>`count(*)`,
-      })
-      .from(courseEvaluations)
-      .innerJoin(courses, eq(courseEvaluations.courseId, courses.id))
-      .where(and(eq(courseEvaluations.status, "submitted"), sql`${courseEvaluations.overallScore} IS NOT NULL`))
-      .groupBy(courses.college)
-      .orderBy(courses.college),
   ]);
 
   // 获取最近评价的详细信息
@@ -579,21 +644,31 @@ export async function getAdminStats() {
     : [];
   const supervisorMap = new Map(supervisorDetails.map((u) => [u.id, u]));
 
+  const totalSubmitted = Number(totalEvaluations[0]?.count || 0);
+  const collegeStats = buildCollegeStats({
+    collegeNames: allCollegeRows.map((r) => r.college),
+    aggregates: collegeAggregates,
+    totalSubmitted,
+  });
+
   return {
     totalCourses: Number(totalCourses[0]?.count || 0),
-    totalEvaluations: Number(totalEvaluations[0]?.count || 0),
+    totalEvaluations: totalSubmitted,
     totalSupervisors: Number(totalSupervisors[0]?.count || 0),
-    evalByCollege: evalByCollege.map((r) => ({ college: r.college, count: Number(r.count) })),
+    // 全部学院（含零评价），两张图表共用此唯一数据源
+    collegeStats,
+    // 已产生评价的学院数——用于「已覆盖学院数」指标
+    coveredCollegeCount: collegeStats.filter((c) => c.count > 0).length,
+    // 兼容旧字段名，避免其它调用方失效
+    evalByCollege: collegeStats.map((c) => ({ college: c.college, count: c.count })),
+    avgScoreByCollege: collegeStats
+      .filter((c) => c.avgScore != null)
+      .map((c) => ({ college: c.college, avgScore: c.avgScore!.toFixed(2), count: c.scoredCount })),
     evalByWeekday: evalByWeekday.map((r) => ({ weekday: r.weekday, count: Number(r.count) })),
     recentEvals: recentEnriched,
     topSupervisors: topSupervisors.map((s) => ({
       supervisor: supervisorMap.get(s.supervisorId),
       count: Number(s.count),
-    })),
-    avgScoreByCollege: avgScoreByCollege.map((r) => ({
-      college: r.college,
-      avgScore: Number(r.avgScore || 0).toFixed(2),
-      count: Number(r.count),
     })),
   };
 }
