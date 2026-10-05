@@ -3,8 +3,12 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useSemesterSelection } from "@/contexts/SemesterSelection";
 import { SemesterCollegeChart } from "@/components/SemesterCollegeChart";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { hasAnyRole } from "@shared/roles";
 
 export default function AdminDashboard() {
+  const { user } = useAuth();
+  const collegeOnly = !hasAnyRole(user, ["graduate_admin", "admin"]);
   const { semesterId, label, isHistorical } = useSemesterSelection();
   const [, navigate] = useLocation();
   const { data: stats, isLoading, error, refetch } = trpc.stats.adminDashboard.useQuery({ semesterId });
@@ -17,7 +21,8 @@ export default function AdminDashboard() {
     <div className="p-4 sm:p-6 space-y-6 max-w-[1440px] mx-auto">
       <header className="border-b border-slate-200 pb-5">
         <p className="text-xs text-slate-500 tracking-wider">浙江工商大学 · 研究生院</p>
-        <h1 className="text-2xl font-semibold text-slate-900 mt-2">学期督导概览</h1>
+        <h1 className="text-2xl font-semibold text-slate-900 mt-2">{collegeOnly ? "本院统计仪表盘" : "学期督导概览"}</h1>
+        <p className="text-sm text-slate-600 mt-2">统计范围：{collegeOnly ? user?.college || "尚未配置学院" : "全校"}</p>
         <p className="mt-2 text-sm text-slate-600">{label} · {isHistorical ? "历史学期档案" : "当前学期"} · 只统计该学期已提交的评价，草稿保留在评价记录中。</p>
       </header>
       {isLoading ? <p role="status">正在加载所选学期数据…</p> : error || !stats ?

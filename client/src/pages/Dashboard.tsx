@@ -13,7 +13,7 @@ const ROLE_LABELS: Record<string, string> = {
   college_secretary: "学院教学秘书",
   graduate_admin: "研究生院主管",
   admin: "系统管理员",
-  user: "普通用户",
+  user: "待配置角色",
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -83,7 +83,7 @@ export default function Dashboard() {
             <h1 className="text-2xl font-bold mb-1">{user?.name || "老师"}</h1>
             <div className="flex items-center gap-2 mt-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ background: "oklch(1 0 0 / 0.2)", backdropFilter: "blur(4px)" }}>
-                {ROLE_LABELS[role] || role}
+                {role === "college_secretary" && canSupervise && scopeLabel === "院级" ? "学院管理" : ROLE_LABELS[role] || role}
                 {/* 督导必须看得出自己是校级还是院级：只标一个学院名会让校级督导误以为被限制在本学院 */}
                 {isSupervisorRole(role) && scopeLabel ? `（${scopeLabel}）` : ""}
               </span>
@@ -152,7 +152,7 @@ export default function Dashboard() {
         )}
 
         {/* 研究生院主管统计 */}
-        {["graduate_admin", "admin"].includes(role) && adminStats && (
+        {["graduate_admin", "admin"].includes(role) && adminStats && "totalSupervisors" in adminStats && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               { label: "全校课程总数", value: adminStats.totalCourses, icon: <BookOpen className="w-5 h-5" />, color: "oklch(0.35 0.13 245)", bg: "oklch(0.93 0.018 240)" },

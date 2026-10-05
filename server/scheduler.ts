@@ -3,72 +3,33 @@
  *
  * 逻辑说明：
  * - 浙工商研究生课程按"周次+星期"排课，无具体日期
- * - 学期开始日期：2026-03-02（第1周星期一）
+ * - 学期开始日期及周数读取当前学期配置
  * - 每天凌晨 0:30 运行，计算明天是第几周星期几，
  *   查找所有 status=pending 且 planWeek 匹配的听课计划，
  *   向对应督导专家发送站内信提醒
  */
 
-import { getDb } from "./db";
-import { listeningPlans, courses, users, notifications } from "../drizzle/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { getDb, getActiveSemester } from "./db";
+import { calculateWeekFromDate, type SemesterConfig } from "../shared/dateUtils";
+import { listeningPlans, courses, notifications } from "../drizzle/schema";
+import { eq, and } from "drizzle-orm";
 
 // ============================================================
 // 学期日期计算
 // ============================================================
 
-/** 学期第1周星期一的日期（2026-03-02） */
-const SEMESTER_START = new Date("2026-03-02T00:00:00+08:00");
-
-/** 中文星期 -> ISO weekday (1=Mon, 7=Sun) */
-const WEEKDAY_MAP: Record<string, number> = {
-  星期一: 1,
-  星期二: 2,
-  星期三: 3,
-  星期四: 4,
-  星期五: 5,
-  星期六: 6,
-  星期日: 7,
-};
-
-/** ISO weekday -> 中文星期 */
-const ISO_TO_CN: Record<number, string> = {
-  1: "星期一",
-  2: "星期二",
-  3: "星期三",
-  4: "星期四",
-  5: "星期五",
-  6: "星期六",
-  7: "星期日",
-};
 
 /**
  * 根据给定日期计算学期周次和星期
  * @returns { week: number, weekdayCN: string } | null（超出学期范围则返回null）
  */
-function getSemesterInfo(date: Date): { week: number; weekdayCN: string } | null {
-  // 转为北京时间的零点
-  const bjDate = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
-  bjDate.setHours(0, 0, 0, 0);
-
-  const startBJ = new Date(SEMESTER_START.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
-  startBJ.setHours(0, 0, 0, 0);
-
-  const diffMs = bjDate.getTime() - startBJ.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) return null; // 学期未开始
-
-  const week = Math.floor(diffDays / 7) + 1;
-  if (week > 19) return null; // 学期已结束
-
-  // JS getDay(): 0=Sun, 1=Mon...6=Sat → 转为 ISO weekday
-  const jsDay = bjDate.getDay();
-  const isoDay = jsDay === 0 ? 7 : jsDay;
-  const weekdayCN = ISO_TO_CN[isoDay];
-
+export function getSemesterInfo(date: Date, semester: SemesterConfig): { week: number; weekdayCN: string } | null {
+  const week = calculateWeekFromDate(date, semester);
+  if (!week || !Number.isFinite(week)) return null;
+  const weekdayCN = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", weekday: "long" }).format(date);
   return { week, weekdayCN };
 }
+
 
 // ============================================================
 // 核心提醒逻辑
@@ -84,7 +45,9 @@ export async function sendListeningReminders(): Promise<void> {
   // 计算"明天"是学期第几周星期几
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const info = getSemesterInfo(tomorrow);
+  const semester = await getActiveSemester();
+  if (!semester) return;
+  const info = getSemesterInfo(tomorrow, semester);
 
   if (!info) {
     console.log("[Scheduler] Tomorrow is outside semester range, no reminders to send");
@@ -114,6 +77,8 @@ export async function sendListeningReminders(): Promise<void> {
       .where(
         and(
           eq(listeningPlans.status, "pending"),
+          eq(listeningPlans.semesterId, semester.id),
+          eq(courses.semesterId, semester.id),
           eq(listeningPlans.planWeek, tomorrowWeek),
           eq(courses.weekday, tomorrowWeekday)
         )

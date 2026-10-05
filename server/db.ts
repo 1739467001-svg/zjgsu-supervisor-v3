@@ -18,6 +18,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { publicUser } from "./publicUser";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -113,7 +114,7 @@ export async function getUserByEmployeeId(employeeId: string) {
 export async function getAllUsers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(users).orderBy(users.role, users.name);
+  return (await db.select().from(users).orderBy(users.role, users.name)).map(publicUser);
 }
 
 /**
@@ -123,10 +124,11 @@ export async function getAllUsers() {
 export async function getUsersByRole(role: string) {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const rows = await db
     .select()
     .from(users)
     .where(or(eq(users.role, role as any), sql`JSON_CONTAINS(${users.extraRoles}, ${JSON.stringify(role)})`));
+  return rows.map(publicUser);
 }
 
 export async function updateUserRole(userId: number, role: string) {
@@ -630,7 +632,7 @@ async function enrichEvaluations(evals: CourseEvaluation[]) {
   ]);
 
   const courseMap = new Map(courseList.map((c) => [c.id, c]));
-  const supervisorMap = new Map(supervisorList.map((u) => [u.id, u]));
+  const supervisorMap = new Map(supervisorList.map((u) => [u.id, publicUser(u)]));
 
   return evals.map((e) => ({
     ...e,
@@ -729,7 +731,7 @@ export async function getAdminStats(semesterId?: number) {
   const supervisorDetails = supervisorIds.length > 0
     ? await db.select().from(users).where(inArray(users.id, supervisorIds))
     : [];
-  const supervisorMap = new Map(supervisorDetails.map((u) => [u.id, u]));
+  const supervisorMap = new Map(supervisorDetails.map((u) => [u.id, publicUser(u)]));
 
   // 三张学院图表共用这一份数据，保证学院集合、数量、排序完全一致
   const collegeRows = collegeStats.map((r) => ({

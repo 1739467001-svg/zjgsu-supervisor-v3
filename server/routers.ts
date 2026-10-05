@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { hasAnyRole, getScopedCollege as resolveScopedCollege, MissingCollegeScopeError, isCollegeInScope, ASSIGNABLE_ROLES, type RoleAwareUser } from "@shared/roles";
+import { publicUser } from "./publicUser";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -167,7 +168,7 @@ export const appRouter = router({
   // 认证
   // ============================================================
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    me: publicProcedure.query((opts) => opts.ctx.user ? publicUser(opts.ctx.user) : null),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -196,7 +197,7 @@ export const appRouter = router({
         const cookieOptions = getSessionCookieOptions(ctx.req);
         ctx.res.cookie(COOKIE_NAME, token, cookieOptions);
 
-        return { success: true, user };
+        return { success: true, user: publicUser(user) };
       }),
 
     // 修改密码
@@ -567,8 +568,20 @@ export const appRouter = router({
   // 统计（研究生院主管）
   // ============================================================
    stats: router({
-    adminDashboard: adminProcedure.input(semesterInput).query(async ({ input }) => {
-      return getAdminStats(await selectedSemesterId(input?.semesterId));
+    adminDashboard: protectedProcedure.input(semesterInput).query(async ({ input, ctx }) => {
+      if (!hasAnyRole(ctx.user, ["graduate_admin", "admin", "college_secretary"])) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      const college = getScopedCollege(ctx.user!);
+      const stats = await getAdminStats(await selectedSemesterId(input?.semesterId));
+      if (!stats || !college) return stats;
+      const rows = stats.semesterColleges.filter(row => isCollegeInScope(college, row.college));
+      // 只返回授权学院的聚合数据，不能附带全校最近评价、人员或排行。
+      return {
+        semesterColleges: rows,
+        totalCourses: rows.reduce((sum, row) => sum + row.totalCourses, 0),
+        totalEvaluations: rows.reduce((sum, row) => sum + row.evaluationCount, 0),
+      };
     }),
     collegeStats: protectedProcedure
       .input(z.object({ college: z.string().optional(), semesterId: z.number().int().positive().optional() }))
@@ -698,7 +711,7 @@ export const appRouter = router({
     }),
 
     updateRole: adminProcedure
-      .input(z.object({ userId: z.number(), role: z.string() }))
+      .input(z.object({ userId: z.number(), role: z.enum(ASSIGNABLE_ROLES) }))
       .mutation(async ({ input }) => {
         await updateUserRole(input.userId, input.role);
         return { success: true };

@@ -19,7 +19,7 @@ interface EvaluationExportData extends CourseEvaluation {
   };
   supervisor?: {
     name: string | null;
-    email: string | null;
+    email?: string | null;
     role?: string | null;
     college?: string | null;
   };

@@ -17,7 +17,7 @@ export const ROLE_LABELS: Record<string, string> = {
   college_secretary: "学院教学秘书",
   graduate_admin: "研究生院主管",
   admin: "系统管理员",
-  user: "普通用户",
+  user: "待配置角色",
 };
 
 export const ASSIGNABLE_ROLES = [
@@ -26,7 +26,6 @@ export const ASSIGNABLE_ROLES = [
   "college_secretary",
   "graduate_admin",
   "admin",
-  "user",
 ] as const;
 
 export const SUPERVISOR_ROLES = ["supervisor_expert", "supervisor_leader"] as const;

@@ -66,24 +66,29 @@ import { toast } from "sonner";
  * 用户管理、统计仪表盘、上传课程数据。这里改成按能力分别判断，
  * admin 既拿督导菜单也拿管理菜单。
  *
- * 传入的是身份切换器里的当前身份（activeRole），不是主角色 ——
- * 附加角色通过切换身份生效。
+ * 导航取完整授权集合，不随工作台视图切换丢失入口。
  */
 export function getMenuItems(role: string) {
+  return getMenuItemsForRoles([role]);
+}
+
+export function getMenuItemsForRoles(roles: readonly string[]) {
   const base = [
     { icon: LayoutDashboard, label: "工作台", path: "/", key: "home" },
     { icon: BookOpen, label: "全校课程", path: "/courses", key: "courses" },
   ];
+  if (!roles.some(r => ["supervisor_expert", "supervisor_leader", "college_secretary", "graduate_admin", "admin"].includes(r))) return [];
 
-  const canSupervise = ["supervisor_expert", "supervisor_leader", "admin"].includes(role);
-  const canAdminister = ["graduate_admin", "admin"].includes(role);
-  const isSecretary = role === "college_secretary";
+  const canSupervise = roles.some(r => ["supervisor_expert", "supervisor_leader", "graduate_admin", "admin"].includes(r));
+  const canAdminister = roles.some(r => ["graduate_admin", "admin"].includes(r));
+  const isSecretary = roles.includes("college_secretary");
 
   if (canSupervise) {
     base.push({ icon: ClipboardList, label: "听课计划", path: "/plans", key: "plans" });
   }
 
-  if (isSecretary) {
+  if (isSecretary && !canAdminister) {
+    base.push({ icon: Building2, label: "本院统计仪表盘", path: "/admin", key: "college-dashboard" });
     base.push({ icon: ClipboardCheck, label: "督导评价", path: "/evaluations", key: "evaluations-secretary" });
     base.push({ icon: BarChart2, label: "评价进度", path: "/course-progress", key: "course-progress-secretary" });
   } else if (canAdminister) {
@@ -174,12 +179,13 @@ function DashboardLayoutContent({ children, setSidebarWidth }: { children: React
   };
 
   const role = activeRole;
-  const menuItems = getMenuItems(role);
+  const menuItems = getMenuItemsForRoles(effectiveRoles);
 
   // 督导角色才带校级/院级后缀；其余角色直接用角色名，避免把同一身份写两遍
   const scopeLabel = getSupervisorScopeLabel(user as any);
   const roleDisplay = (r: string) => {
-    const label = ROLE_LABELS[r] || r;
+    const label = r === "college_secretary" && effectiveRoles.includes("supervisor_expert") && scopeLabel === "院级"
+      ? "学院管理" : ROLE_LABELS[r] || r;
     return isSupervisorRole(r) && scopeLabel ? `${label}（${scopeLabel}）` : label;
   };
 

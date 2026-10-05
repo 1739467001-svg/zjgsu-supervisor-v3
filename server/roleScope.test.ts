@@ -156,6 +156,49 @@ describe("督导范围（校级/院级）", () => {
 // 多角色（extraRoles）
 // ============================================================
 describe("多角色（extraRoles）", () => {
+  it.each(["college_secretary", "supervisor_expert"])("%s 的学院统计不泄露全校数据", async role => {
+    vi.mocked(db.getAdminStats).mockResolvedValueOnce({
+      totalCourses: 999, totalEvaluations: 999, recentEvals: [{ secret: "外院评语" }],
+      semesterColleges: [
+        { college: HUMANITIES, totalCourses: 10, evaluationCount: 3 },
+        { college: STATS, totalCourses: 989, evaluationCount: 996 },
+      ],
+    } as any);
+    const caller = appRouter.createCaller(ctxFor({ role, extraRoles: ["college_secretary"], college: HUMANITIES, supervisorScope: "college" }));
+    expect(await caller.stats.adminDashboard()).toEqual({
+      totalCourses: 10, totalEvaluations: 3,
+      semesterColleges: [{ college: HUMANITIES, totalCourses: 10, evaluationCount: 3 }],
+    });
+  });
+  it("学院统计缺少学院时拒绝访问", async () => {
+    const caller = appRouter.createCaller(ctxFor({ role: "college_secretary", college: null }));
+    await expect(caller.stats.adminDashboard()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("普通督导不能查看学院管理仪表盘", async () => {
+    const caller = appRouter.createCaller(ctxFor({ role: "supervisor_expert" }));
+    await expect(caller.stats.adminDashboard()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("不允许分配已移除角色，旧占位账号不能访问业务接口", async () => {
+    const admin = appRouter.createCaller(ctxFor({ role: "admin" }));
+    await expect(admin.users.updateRole({ userId: 10, role: "user" as any })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const pending = appRouter.createCaller(ctxFor({ role: "user" }));
+    await expect(pending.courses.list({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it.each([
+    ["college_secretary", "supervisor_expert"],
+    ["supervisor_expert", "college_secretary"],
+  ])("院级双身份 %s + %s 可评可查但不越院", async (role, extra) => {
+    const caller = appRouter.createCaller(ctxFor({ role, extraRoles: [extra], college: HUMANITIES, supervisorScope: "college" }));
+    vi.mocked(db.getCourseById).mockResolvedValue({ id: 6, semesterId: 1, college: HUMANITIES } as any);
+    await caller.plans.create({ courseId: 6, planWeek: 3 });
+    await caller.evaluations.create({ courseId: 6, status: "draft" });
+    expect(db.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({ supervisorId: 10, courseId: 6 }));
+    await caller.evaluations.allEvaluations({ college: STATS });
+    expect(db.getAllEvaluations).toHaveBeenCalledWith(expect.objectContaining({ college: HUMANITIES }));
+    vi.mocked(db.getCourseById).mockResolvedValue({ id: 7, semesterId: 1, college: STATS } as any);
+    await expect(caller.evaluations.create({ courseId: 7, status: "draft" })).rejects.toThrow(/本学院/);
+    await expect(caller.stats.adminDashboard()).resolves.toBeNull();
+  });
   it("学院教学秘书本身无督导权限", async () => {
     const caller = appRouter.createCaller(ctxFor({ role: "college_secretary", college: HUMANITIES }));
     await expect(caller.plans.myPlans()).rejects.toThrow(/督导专家/);
@@ -181,9 +224,9 @@ describe("多角色（extraRoles）", () => {
     await expect(caller.users.list()).resolves.toEqual([]);
   });
 
-  it("普通用户无附加角色时不能访问管理端接口", async () => {
+  it("未配置业务角色时不能访问管理端接口", async () => {
     const caller = appRouter.createCaller(ctxFor({ role: "user", extraRoles: [] }));
-    await expect(caller.users.list()).rejects.toThrow(/研究生院主管/);
+    await expect(caller.users.list()).rejects.toThrow(/尚未配置业务角色/);
   });
 });
 

@@ -116,10 +116,10 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
+  server.listen(port, process.env.APP_HOST || "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${port}/`);
     // 启动听课提醒定时任务（每天凌晨 0:30 运行）
-    startScheduler();
+    if (process.env.DISABLE_SCHEDULER !== "1") startScheduler();
   });
 }
 

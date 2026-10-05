@@ -25,7 +25,6 @@ const ROLE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color:
   college_secretary: { label: "学院教学秘书", icon: <Building2 className="w-3.5 h-3.5" />, color: "oklch(0.55 0.14 85)", bg: "oklch(0.95 0.02 85)" },
   graduate_admin: { label: "研究生院主管", icon: <Users className="w-3.5 h-3.5" />, color: "oklch(0.55 0.14 300)", bg: "oklch(0.95 0.02 300)" },
   admin: { label: "系统管理员", icon: <Shield className="w-3.5 h-3.5" />, color: "oklch(0.55 0.14 30)", bg: "oklch(0.95 0.02 30)" },
-  user: { label: "普通用户", icon: <User className="w-3.5 h-3.5" />, color: "oklch(0.52 0.025 240)", bg: "oklch(0.93 0.01 240)" },
 };
 
 const SUPERVISOR_ROLES = ["supervisor_expert", "supervisor_leader"];
@@ -177,14 +176,14 @@ export default function UserManagement() {
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ background: "oklch(0.97 0.004 240)", borderBottom: "1px solid oklch(0.90 0.01 240)" }}>
-                    {["姓名", "工号", "学院/督导范围", "联系方式", "角色", "附加角色", "操作"].map((h) => (
+                    {["姓名", "工号", "学院/督导范围", "角色", "附加角色", "操作"].map((h) => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold" style={{ color: "oklch(0.52 0.025 240)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((user) => {
-                    const roleConf = ROLE_CONFIG[user.role || "user"] || ROLE_CONFIG.user;
+                    const roleConf = ROLE_CONFIG[user.role || ""] || { label: "待配置角色", icon: <User className="w-3.5 h-3.5" />, color: "#64748b", bg: "#f1f5f9" };
                     const isSupervisor = SUPERVISOR_ROLES.includes(user.role || "");
                     const extraRoles = normalizeExtraRoles((user as any).extraRoles);
                     // 范围来自 supervisorScope 字段本身，不再由"有没有填学院"推断
@@ -207,7 +206,6 @@ export default function UserManagement() {
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-xs" style={{ color: "oklch(0.52 0.025 240)" }}>{user.phone || "-"}</td>
                         <td className="px-4 py-3">
                           <span className="flex items-center gap-1 w-fit px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: roleConf.bg, color: roleConf.color }}>
                             {roleConf.icon}{roleConf.label}
@@ -270,7 +268,7 @@ export default function UserManagement() {
             <div className="space-y-2">
               <Label className="text-sm">附加角色（在主角色之外，可同时拥有）</Label>
               <div className="grid grid-cols-2 gap-2">
-                {ASSIGNABLE_ROLES.filter((r) => r !== "user").map((r) => (
+                {ASSIGNABLE_ROLES.map((r) => (
                   <label key={r} className="flex items-center gap-2 text-sm cursor-pointer">
                     <Checkbox
                       checked={editDialog.extraRoles.includes(r)}
