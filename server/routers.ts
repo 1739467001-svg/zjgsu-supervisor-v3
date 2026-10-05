@@ -3,6 +3,11 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { hasAnyRole, getScopedCollege as resolveScopedCollege, MissingCollegeScopeError, isCollegeInScope, ASSIGNABLE_ROLES, type RoleAwareUser } from "@shared/roles";
 import { publicUser } from "./publicUser";
+import { isPasswordHash, verifyPassword, validateNewPassword } from "./passwords";
+import { checkLoginThrottle, clearAccountLoginThrottle } from "./loginThrottle";
+import { submissionErrors } from "@shared/evaluationValidation";
+import { normalizeExtraRoles } from "@shared/roles";
+import { calculateWeekFromDate } from "@shared/dateUtils";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -48,6 +53,7 @@ import {
   updateUserPassword,
   updateUserRole,
   upsertUser,
+  getUserById, saveAccountProfile, createUserAccount, disableUserAccount,
 } from "./db";
 import { canViewEvaluation, canMutateListeningPlan } from "@shared/evaluationAccess";
 import { isWritableSemester } from "@shared/semesterArchive";
@@ -90,6 +96,14 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 const semesterInput = z.object({ semesterId: z.number().int().positive().optional() }).optional();
+const accountProfileSchema = z.object({
+  role: z.enum(ASSIGNABLE_ROLES), extraRoles: z.array(z.enum(ASSIGNABLE_ROLES)).max(1),
+  college: z.string().trim().max(128).nullable(), supervisorScope: z.enum(["school", "college"]),
+});
+async function accountAction(action: () => Promise<unknown>) {
+  try { await action(); return { success: true }; }
+  catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: (error as Error).message }); }
+}
 async function selectedSemesterId(id?: number) {
   const semester = id == null ? await getActiveSemester() : await getSemesterById(id);
   if (!semester) throw new TRPCError({ code: "BAD_REQUEST", message: "请选择已建立档案的学期" });
@@ -110,7 +124,7 @@ const evaluationSchema = z.object({
   courseId: z.number().int().positive("请选择有效课程"),
   planId: z.number().int().positive().optional(),
   listenDate: z.string().optional(),
-  actualWeek: z.number().optional(),
+  actualWeek: z.number().int().min(1).max(30).optional(),
   overallScore: z.number().min(1).max(5).optional(),
   // 定量评分（字段名与数据库 schema 保持一致）
   score_teaching_content: z.number().min(1).max(5).optional(),
@@ -161,6 +175,30 @@ function ensureCourseInScope(user: RoleAwareUser, course: { college: string | nu
   }
 }
 
+async function validateEvaluation(data: z.infer<typeof evaluationSchema>, course: Awaited<ReturnType<typeof ensureCourseExists>>, authorId: number) {
+  const semester = await getActiveSemester();
+  if (!semester) throw new TRPCError({ code: "BAD_REQUEST", message: "请先配置当前学期" });
+  if (data.status === "submitted") {
+    const errors = submissionErrors(data);
+    if (errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("；") });
+  }
+  let week = data.actualWeek;
+  if (data.listenDate) {
+    const date = data.listenDate;
+    const parsedDate = new Date(`${date}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) throw new TRPCError({ code: "BAD_REQUEST", message: "听课日期无效" });
+    const derived = calculateWeekFromDate(date, semester);
+    if (!derived || (week != null && week !== derived)) throw new TRPCError({ code: "BAD_REQUEST", message: "听课日期和周次须属于当前学期且相互一致" });
+    week = derived;
+  }
+  if (week != null && (week > semester.totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(week)))) throw new TRPCError({ code: "BAD_REQUEST", message: "该周不在课程排课范围内" });
+  if (data.planId) {
+    const plan = await getListeningPlanById(data.planId);
+    if (!plan || plan.supervisorId !== authorId || plan.courseId !== course.id || plan.semesterId !== semester.id || (plan.planWeek != null && week != null && plan.planWeek !== week)) throw new TRPCError({ code: "BAD_REQUEST", message: "听课计划与评价作者、课程、学期或周次不一致" });
+  }
+  return week;
+}
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -176,18 +214,20 @@ export const appRouter = router({
     }),
     // 工号登录
     loginByEmployeeId: publicProcedure
-      .input(z.object({ employeeId: z.string().min(1), password: z.string().min(1) }))
+      .input(z.object({ employeeId: z.string().trim().min(1).max(32), password: z.string().min(1).max(128) }))
       .mutation(async ({ input, ctx }) => {
+        checkLoginThrottle(input.employeeId, ctx.req.ip || ctx.req.socket?.remoteAddress || "unknown");
         const user = await getUserByEmployeeId(input.employeeId.trim());
         if (!user) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "工号不存在，请联系管理员" });
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "工号或密码错误，或账号不可用" });
         }
 
         // 验证密码（默认密码为工号）
-        const expectedPassword = user.password || user.employeeId || "";
-        if (input.password !== expectedPassword) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "密码错误，默认密码为工号" });
+        if (!hasAnyRole(user, ASSIGNABLE_ROLES) || !(await verifyPassword(input.password, user.password, user.employeeId || ""))) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "工号或密码错误，或账号不可用" });
         }
+        if (!isPasswordHash(user.password)) user.password = await updateUserPassword(user.id, input.password, input.password === user.employeeId);
+        clearAccountLoginThrottle(input.employeeId);
 
         // 更新最后登录时间
         await upsertUser({ ...user, lastSignedIn: new Date() });
@@ -202,17 +242,18 @@ export const appRouter = router({
 
     // 修改密码
     changePassword: protectedProcedure
-      .input(z.object({ oldPassword: z.string().min(1), newPassword: z.string().min(6) }))
+      .input(z.object({ oldPassword: z.string().min(1).max(128), newPassword: z.string().min(10).max(128) }))
       .mutation(async ({ input, ctx }) => {
         const user = ctx.user!;
         const dbUser = await getUserByEmployeeId(user.employeeId || "");
         if (!dbUser) throw new TRPCError({ code: "NOT_FOUND", message: "用户不存在" });
-        const expectedPassword = dbUser.password || dbUser.employeeId || "";
-        if (input.oldPassword !== expectedPassword) {
+        if (!(await verifyPassword(input.oldPassword, dbUser.password, dbUser.employeeId || ""))) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "原密码错误" });
         }
+        try { validateNewPassword(input.newPassword, dbUser.employeeId); } catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: (error as Error).message }); }
         // 使用专用的updateUserPassword函数，确保密码可靠写入数据库
         await updateUserPassword(dbUser.id, input.newPassword);
+        ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
         return { success: true };
       }),
   }),
@@ -243,21 +284,23 @@ export const appRouter = router({
         return getCourses({ ...input, college, semesterId: await selectedSemesterId(input.semesterId) });
       }),
 
-    getById: protectedProcedure.input(z.number()).query(async ({ input }) => {
+    getById: protectedProcedure.input(z.number()).query(async ({ input, ctx }) => {
       if (input <= 0) return null;
       const course = await getCourseById(input);
+      if (course) ensureCourseInScope(ctx.user!, course);
       return course || null;
     }),
 
-    getColleges: protectedProcedure.input(semesterInput).query(async ({ input }) => {
+    getColleges: protectedProcedure.input(semesterInput).query(async ({ input, ctx }) => {
       const colleges = await getDistinctColleges(await selectedSemesterId(input?.semesterId));
-      return colleges || [];
+      const scope = getScopedCollege(ctx.user);
+      return scope ? colleges.filter(college => isCollegeInScope(scope, college)) : colleges || [];
     }),
 
     getTeachers: protectedProcedure
       .input(z.object({ college: z.string().optional(), semesterId: z.number().int().positive().optional() }))
-      .query(async ({ input }) => {
-        const teachers = await getDistinctTeachers(input.college, await selectedSemesterId(input.semesterId));
+      .query(async ({ input, ctx }) => {
+        const teachers = await getDistinctTeachers(getScopedCollege(ctx.user) || input.college, await selectedSemesterId(input.semesterId));
         return teachers || [];
       }),
   }),
@@ -279,6 +322,7 @@ export const appRouter = router({
         ensureCourseInScope(ctx.user!, course);
         const activeSemester = await getActiveSemester();
         await requireCurrentSemester(course.semesterId);
+        if (input.planWeek != null && (!Number.isInteger(input.planWeek) || input.planWeek < 1 || input.planWeek > activeSemester!.totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek)))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
         return createListeningPlan({
           supervisorId: ctx.user!.id,
           courseId: input.courseId,
@@ -317,6 +361,7 @@ export const appRouter = router({
     getUsedWeeks: supervisorProcedure
       .input(z.object({ courseId: z.number() }))
       .query(async ({ input, ctx }) => {
+        ensureCourseInScope(ctx.user!, await ensureCourseExists(input.courseId));
         return getUsedWeeksForCourse(ctx.user!.id, input.courseId);
       }),
   }),
@@ -331,17 +376,19 @@ export const appRouter = router({
 
       const activeSemester = await getActiveSemester();
       await requireCurrentSemester(course.semesterId);
+      const actualWeek = await validateEvaluation(input, course, ctx.user!.id);
       const evaluation = await createEvaluation({
         ...input,
         supervisorId: ctx.user!.id,
         semesterId: activeSemester?.id,
+        actualWeek,
         listenDate: input.listenDate ? new Date(input.listenDate) : undefined,
       });
 
       // 如果提交评价，发送通知
       if (input.status === "submitted" && evaluation) {
         // 同步关联的听课计划状态为"已评价"，避免待听课列表仍显示该课程
-        const matchedPlanId = await completePendingPlanForEvaluation(ctx.user!.id, input.courseId, input.actualWeek ?? null);
+        const matchedPlanId = await completePendingPlanForEvaluation(ctx.user!.id, input.courseId, actualWeek ?? null);
         if (matchedPlanId && !evaluation.planId) {
           await updateEvaluation(evaluation.id, { planId: matchedPlanId });
         }
@@ -394,8 +441,10 @@ export const appRouter = router({
         await requireCurrentSemester(existing.semesterId);
         await requireCurrentSemester(course.semesterId);
         if (existing.courseId !== input.data.courseId) throw new TRPCError({ code: "BAD_REQUEST", message: "不能改变评价关联的原课程" });
+        const actualWeek = await validateEvaluation({ ...existing, ...input.data, status: input.data.status || existing.status } as any, course, existing.supervisorId);
         await updateEvaluation(input.id, {
           ...input.data,
+          actualWeek,
           listenDate: input.data.listenDate ? new Date(input.data.listenDate) : undefined,
         });
 
@@ -706,38 +755,68 @@ export const appRouter = router({
   // 用户管理（研究生院主管）
   // ============================================================
   users: router({
+    create: adminProcedure.input(accountProfileSchema.extend({ employeeId: z.string().trim().min(1).max(32).regex(/^[\w-]+$/, "工号只能包含字母、数字、下划线或连字符"), name: z.string().trim().min(1).max(80), password: z.string().min(10).max(128) })).mutation(({ input }) => accountAction(async () => {
+      validateNewPassword(input.password, input.employeeId);
+      await createUserAccount(input);
+    })),
+    updateProfile: adminProcedure.input(accountProfileSchema.extend({ userId: z.number().int().positive() })).mutation(({ input, ctx }) => accountAction(async () => {
+      const { userId, ...profile } = input;
+      await saveAccountProfile(userId, profile, ctx.user!.id);
+    })),
+    resetPassword: adminProcedure.input(z.object({ userId: z.number().int().positive(), password: z.string().min(10).max(128) })).mutation(({ input }) => accountAction(async () => {
+      const target = await getUserById(input.userId);
+      if (!target) throw new Error("账号不存在");
+      if (target.password?.startsWith("disabled$")) throw new Error("账号已停用，请使用启用功能设置新密码");
+      validateNewPassword(input.password, target.employeeId);
+      await updateUserPassword(input.userId, input.password, true);
+    })),
+    disable: adminProcedure.input(z.object({ userId: z.number().int().positive() })).mutation(({ input, ctx }) => accountAction(() => disableUserAccount(input.userId, ctx.user!.id))),
+    activate: adminProcedure.input(z.object({ userId: z.number().int().positive(), password: z.string().min(10).max(128) })).mutation(({ input }) => accountAction(async () => {
+      const target = await getUserById(input.userId);
+      if (!target?.password?.startsWith("disabled$")) throw new Error("账号未停用或不存在");
+      validateNewPassword(input.password, target.employeeId);
+      await updateUserPassword(input.userId, input.password, true);
+    })),
     list: adminProcedure.query(async () => {
       return getAllUsers();
     }),
 
     updateRole: adminProcedure
       .input(z.object({ userId: z.number(), role: z.enum(ASSIGNABLE_ROLES) }))
-      .mutation(async ({ input }) => {
-        await updateUserRole(input.userId, input.role);
+      .mutation(async ({ input, ctx }) => {
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        await accountAction(() => saveAccountProfile(target.id, { role: input.role, extraRoles: normalizeExtraRoles(target.extraRoles).filter(role => role !== input.role), college: target.college, supervisorScope: target.supervisorScope }, ctx.user!.id));
         return { success: true };
       }),
 
     // 更新附加角色（多角色切换用）
     updateExtraRoles: adminProcedure
-      .input(z.object({ userId: z.number(), extraRoles: z.array(z.enum(ASSIGNABLE_ROLES)) }))
-      .mutation(async ({ input }) => {
-        await updateUserExtraRoles(input.userId, input.extraRoles);
+      .input(z.object({ userId: z.number(), extraRoles: z.array(z.enum(ASSIGNABLE_ROLES)).max(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        await accountAction(() => saveAccountProfile(target.id, { role: target.role, extraRoles: input.extraRoles, college: target.college, supervisorScope: target.supervisorScope }, ctx.user!.id));
         return { success: true };
       }),
 
     // 更新所属学院（学院教学秘书的管辖学院；对督导是人事归属学院）
     updateCollege: adminProcedure
       .input(z.object({ userId: z.number(), college: z.string().nullable() }))
-      .mutation(async ({ input }) => {
-        await updateUserCollege(input.userId, input.college);
+      .mutation(async ({ input, ctx }) => {
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        await accountAction(() => saveAccountProfile(target.id, { role: target.role, extraRoles: normalizeExtraRoles(target.extraRoles), college: input.college, supervisorScope: target.supervisorScope }, ctx.user!.id));
         return { success: true };
       }),
 
     // 更新督导范围（校级=全校课程，院级=仅本学院）
     updateSupervisorScope: adminProcedure
       .input(z.object({ userId: z.number(), scope: z.enum(["school", "college"]) }))
-      .mutation(async ({ input }) => {
-        await updateUserSupervisorScope(input.userId, input.scope);
+      .mutation(async ({ input, ctx }) => {
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        await accountAction(() => saveAccountProfile(target.id, { role: target.role, extraRoles: normalizeExtraRoles(target.extraRoles), college: target.college, supervisorScope: input.scope }, ctx.user!.id));
         return { success: true };
       }),
 

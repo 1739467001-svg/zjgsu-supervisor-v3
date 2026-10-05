@@ -158,7 +158,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: { children: React
 
   const changePasswordMutation = trpc.auth.changePassword.useMutation({
     onSuccess: () => {
-      toast.success("密码修改成功！下次登录请使用新密码");
+      toast.success("密码修改成功，请重新登录");
+      window.location.href = "/login";
       setShowChangePwd(false);
       setOldPwd(""); setNewPwd(""); setConfirmPwd("");
     },
@@ -169,8 +170,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: { children: React
     if (!oldPwd || !newPwd || !confirmPwd) {
       toast.error("请填写所有密码字段"); return;
     }
-    if (newPwd.length < 6) {
-      toast.error("新密码至少6位"); return;
+    if (newPwd.length < 10 || newPwd.length > 128) {
+      toast.error("新密码须为10—128位，包含字母及数字或符号"); return;
     }
     if (newPwd !== confirmPwd) {
       toast.error("两次输入的新密码不一致"); return;

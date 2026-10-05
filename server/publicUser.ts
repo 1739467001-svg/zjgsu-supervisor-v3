@@ -1,4 +1,5 @@
 import type { User } from "../drizzle/schema";
+import { isAccountDisabled, isPasswordResetRequired } from "./passwords";
 
 /** 浏览器可见人员字段白名单；新增数据库字段不会自动暴露。 */
 export function publicUser(user: User) {
@@ -6,6 +7,7 @@ export function publicUser(user: User) {
     id: user.id, openId: user.openId, name: user.name,
     employeeId: user.employeeId, role: user.role, extraRoles: user.extraRoles,
     college: user.college, supervisorScope: user.supervisorScope,
+    disabled: isAccountDisabled(user.password), passwordChangeRequired: isPasswordResetRequired(user.password),
     createdAt: user.createdAt, updatedAt: user.updatedAt, lastSignedIn: user.lastSignedIn,
   };
 }

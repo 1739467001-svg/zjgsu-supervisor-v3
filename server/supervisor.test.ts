@@ -42,6 +42,7 @@ vi.mock("./db", () => ({
   getUsersByRole: vi.fn().mockResolvedValue([]),
   updateUserRole: vi.fn().mockResolvedValue(undefined),
   getUserByEmployeeId: vi.fn().mockResolvedValue(null),
+  updateUserPassword: vi.fn().mockResolvedValue("scrypt-reset$mock$mock"),
   upsertUser: vi.fn().mockResolvedValue(undefined),
   getCollegeStats: vi.fn().mockResolvedValue({ total: 0, submitted: 0, draft: 0 }),
 }));
@@ -252,7 +253,7 @@ describe("auth.loginByEmployeeId", () => {
     const caller = appRouter.createCaller(ctx);
     await expect(
       caller.auth.loginByEmployeeId({ employeeId: "9999999", password: "9999999" })
-    ).rejects.toThrow("工号不存在");
+    ).rejects.toThrow("工号或密码错误");
   });
 
   it("login fails with wrong password", async () => {

@@ -31,11 +31,17 @@ const SUPERVISOR_ROLES = ["supervisor_expert", "supervisor_leader"];
 
 export default function UserManagement() {
   const [search, setSearch] = useState("");
+  const [accountDialog, setAccountDialog] = useState<{ mode: "create" | "reset" | "activate"; userId?: number; name: string; employeeId: string } | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [newRole, setNewRole] = useState<(typeof ASSIGNABLE_ROLES)[number]>("supervisor_expert");
+  const [newCollege, setNewCollege] = useState("");
+  const [newScope, setNewScope] = useState<SupervisorScope>("college");
   const [roleFilter, setRoleFilter] = useState("all");
   const [editDialog, setEditDialog] = useState<{
     open: boolean;
     userId?: number;
     name?: string;
+    role?: (typeof ASSIGNABLE_ROLES)[number];
     extraRoles: string[];
     college: string;
     supervisorScope: SupervisorScope;
@@ -60,6 +66,14 @@ export default function UserManagement() {
   const updateExtraRolesMutation = trpc.users.updateExtraRoles.useMutation({
     onError: (err) => toast.error(err.message),
   });
+  const accountSuccess = () => {
+    toast.success("账号已更新"); setAccountDialog(null); setTemporaryPassword(""); utils.users.list.invalidate();
+  };
+  const createAccount = trpc.users.create.useMutation({ onSuccess: accountSuccess, onError: err => toast.error(err.message) });
+  const resetPassword = trpc.users.resetPassword.useMutation({ onSuccess: accountSuccess, onError: err => toast.error(err.message) });
+  const activateAccount = trpc.users.activate.useMutation({ onSuccess: accountSuccess, onError: err => toast.error(err.message) });
+  const disableAccount = trpc.users.disable.useMutation({ onSuccess: () => { toast.success("账号已停用，历史记录保留"); utils.users.list.invalidate(); }, onError: err => toast.error(err.message) });
+  const updateProfile = trpc.users.updateProfile.useMutation({ onError: err => toast.error(err.message) });
 
   const updateCollegeMutation = trpc.users.updateCollege.useMutation({
     onError: (err) => toast.error(err.message),
@@ -74,6 +88,7 @@ export default function UserManagement() {
       open: true,
       userId: u.id,
       name: u.name || "",
+      role: u.role as (typeof ASSIGNABLE_ROLES)[number],
       extraRoles: normalizeExtraRoles((u as any).extraRoles),
       college: u.college || "",
       supervisorScope: (u as any).supervisorScope === "college" ? "college" : "school",
@@ -91,13 +106,12 @@ export default function UserManagement() {
     if (!editDialog.userId) return;
     try {
       const college = editDialog.college.trim() || null;
-      // 院级范围必须有学院才成立，否则该督导会既受限又无范围可依 —— 直接降级为校级
-      const scope: SupervisorScope = editDialog.supervisorScope === "college" && college ? "college" : "school";
-      await Promise.all([
-        updateExtraRolesMutation.mutateAsync({ userId: editDialog.userId, extraRoles: editDialog.extraRoles as any }),
-        updateCollegeMutation.mutateAsync({ userId: editDialog.userId, college }),
-        updateScopeMutation.mutateAsync({ userId: editDialog.userId, scope }),
-      ]);
+      if (editDialog.supervisorScope === "college" && !college) {
+        toast.error("请填写所属学院，院级范围不能自动改为校级");
+        return;
+      }
+      const scope: SupervisorScope = editDialog.supervisorScope;
+      await updateProfile.mutateAsync({ userId: editDialog.userId, role: editDialog.role!, extraRoles: editDialog.extraRoles as any, college, supervisorScope: scope });
       if (scope !== editDialog.supervisorScope) {
         toast.success("已保存（未填学院，督导范围按校级处理）");
       } else {
@@ -127,6 +141,7 @@ export default function UserManagement() {
         <div>
           <h1 className="text-xl font-bold" style={{ color: "oklch(0.18 0.025 240)" }}>用户管理</h1>
           <p className="text-sm mt-0.5" style={{ color: "oklch(0.52 0.025 240)" }}>管理系统用户角色与权限</p>
+          <Button className="mt-3" onClick={() => { setTemporaryPassword(""); setNewCollege(""); setAccountDialog({ mode: "create", name: "", employeeId: "" }); }}>新增用户</Button>
         </div>
 
         {/* 角色统计 */}
@@ -240,6 +255,9 @@ export default function UserManagement() {
                             <Button variant="outline" size="sm" className="h-7 w-7 p-0" title="设置附加角色 / 督导范围" onClick={() => openEditDialog(user)}>
                               <Settings2 className="w-3.5 h-3.5" />
                             </Button>
+                            <Badge variant={user.disabled ? "destructive" : "outline"}>{user.disabled ? "已停用" : "正常"}</Badge>
+                            <Button variant="outline" size="sm" onClick={() => { setTemporaryPassword(""); setAccountDialog({ mode: user.disabled ? "activate" : "reset", userId: user.id, name: user.name || "", employeeId: user.employeeId || "" }); }}>{user.disabled ? "启用" : "重置密码"}</Button>
+                            {!user.disabled && <Button variant="outline" size="sm" disabled={disableAccount.isPending} onClick={() => { if (window.confirm(`停用 ${user.name || user.employeeId}？历史评价与课表不会删除。`)) disableAccount.mutate({ userId: user.id }); }}>停用</Button>}
                           </div>
                         </td>
                       </tr>
@@ -313,12 +331,31 @@ export default function UserManagement() {
             <Button variant="outline" onClick={() => setEditDialog({ open: false, extraRoles: [], college: "", supervisorScope: "school" })}>取消</Button>
             <Button
               onClick={handleSaveEdit}
-              disabled={updateExtraRolesMutation.isPending || updateCollegeMutation.isPending || updateScopeMutation.isPending}
+              disabled={updateProfile.isPending}
               style={{ background: "oklch(0.35 0.13 245)" }}
             >
               保存
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!accountDialog} onOpenChange={open => { if (!open) { setAccountDialog(null); setTemporaryPassword(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{accountDialog?.mode === "create" ? "新增用户" : accountDialog?.mode === "activate" ? "启用账号" : "重置密码"}</DialogTitle><DialogDescription>设置一次性初始密码，并通过校内渠道告知本人。首次登录须修改密码。</DialogDescription></DialogHeader>
+          {accountDialog?.mode === "create" ? <div className="space-y-3">
+            <Label htmlFor="account-name">姓名</Label><Input id="account-name" value={accountDialog.name} onChange={e => setAccountDialog({ ...accountDialog, name: e.target.value })} />
+            <Label htmlFor="account-id">工号</Label><Input id="account-id" value={accountDialog.employeeId} onChange={e => setAccountDialog({ ...accountDialog, employeeId: e.target.value })} />
+            <Label>角色</Label><Select value={newRole} onValueChange={value => setNewRole(value as typeof newRole)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASSIGNABLE_ROLES.map(role => <SelectItem key={role} value={role}>{ROLE_CONFIG[role].label}</SelectItem>)}</SelectContent></Select>
+            <Label htmlFor="account-college">所属学院</Label><Input id="account-college" value={newCollege} onChange={e => setNewCollege(e.target.value)} />
+            <Label>督导范围</Label><Select value={newScope} onValueChange={value => setNewScope(value as SupervisorScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="college">院级</SelectItem><SelectItem value="school">校级</SelectItem></SelectContent></Select>
+          </div> : <p>{accountDialog?.name} · {accountDialog?.employeeId}</p>}
+          <Label htmlFor="account-password">初始密码（10—128 位，字母及数字或符号）</Label><Input id="account-password" type="password" autoComplete="new-password" value={temporaryPassword} onChange={e => setTemporaryPassword(e.target.value)} />
+          <DialogFooter><Button disabled={createAccount.isPending || resetPassword.isPending || activateAccount.isPending} onClick={() => {
+            if (!accountDialog) return;
+            if (accountDialog.mode === "create") createAccount.mutate({ name: accountDialog.name, employeeId: accountDialog.employeeId, password: temporaryPassword, role: newRole, extraRoles: [], college: newCollege.trim() || null, supervisorScope: newScope });
+            else if (accountDialog.mode === "reset") resetPassword.mutate({ userId: accountDialog.userId!, password: temporaryPassword });
+            else activateAccount.mutate({ userId: accountDialog.userId!, password: temporaryPassword });
+          }}>确认保存</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </DashboardLayout>

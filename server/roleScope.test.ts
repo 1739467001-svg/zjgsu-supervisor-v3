@@ -6,6 +6,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import * as db from "./db";
+import { REQUIRED_SCORE_FIELDS } from "../shared/evaluationValidation";
+const completeSubmission = { ...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key => [key, 4])), score_research_teaching: 4, overallScore: 4, highlights: "测试亮点", suggestions: "测试建议", actualWeek: 7 };
 
 vi.mock("./db", () => ({
   getCourses: vi.fn().mockResolvedValue({ data: [], total: 0 }),
@@ -45,6 +47,11 @@ vi.mock("./db", () => ({
   updateUserCollege: vi.fn().mockResolvedValue(undefined),
   updateUserPassword: vi.fn().mockResolvedValue(undefined),
   getUserByEmployeeId: vi.fn().mockResolvedValue(null),
+  getUserById: vi.fn().mockResolvedValue(null),
+  getListeningPlanById: vi.fn().mockResolvedValue({ id: 555, supervisorId: 44, courseId: 9, semesterId: 1, planWeek: 7 }),
+  saveAccountProfile: vi.fn().mockResolvedValue(undefined),
+  createUserAccount: vi.fn().mockResolvedValue(undefined),
+  disableUserAccount: vi.fn().mockResolvedValue(undefined),
   upsertUser: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -274,7 +281,7 @@ describe("提交评价后自动完结听课计划", () => {
     vi.mocked(db.completePendingPlanForEvaluation).mockResolvedValue(555);
     const caller = appRouter.createCaller(ctxFor({ id: 44, role: "supervisor_expert" }));
 
-    await caller.evaluations.create({ courseId: 9, actualWeek: 7, status: "submitted" });
+    await caller.evaluations.create({ ...completeSubmission, courseId: 9, actualWeek: 7, status: "submitted" });
 
     expect(db.completePendingPlanForEvaluation).toHaveBeenCalledWith(44, 9, 7);
     // 并把计划 ID 回写到评价记录上
@@ -297,7 +304,7 @@ describe("提交评价后自动完结听课计划", () => {
     } as any);
     const caller = appRouter.createCaller(ctxFor({ id: 44, role: "supervisor_expert" }));
 
-    await caller.evaluations.update({ id: 100, data: { courseId: 9, actualWeek: 7, status: "submitted" } });
+    await caller.evaluations.update({ id: 100, data: { ...completeSubmission, courseId: 9, actualWeek: 7, status: "submitted" } });
 
     expect(db.completePendingPlanForEvaluation).toHaveBeenCalledWith(44, 9, 7);
   });
@@ -309,7 +316,7 @@ describe("提交评价后自动完结听课计划", () => {
     } as any);
     const caller = appRouter.createCaller(ctxFor({ id: 44, role: "supervisor_expert" }));
 
-    await caller.evaluations.update({ id: 100, data: { courseId: 9, actualWeek: 7, status: "submitted" } });
+    await caller.evaluations.update({ id: 100, data: { ...completeSubmission, courseId: 9, actualWeek: 7, status: "submitted" } });
 
     expect(db.completePendingPlanForEvaluation).not.toHaveBeenCalled();
   });
@@ -321,7 +328,7 @@ describe("提交评价后自动完结听课计划", () => {
     } as any);
     const caller = appRouter.createCaller(ctxFor({ id: 44, role: "supervisor_expert" }));
 
-    await caller.evaluations.update({ id: 100, data: { courseId: 9, actualWeek: 7, status: "submitted" } });
+    await caller.evaluations.update({ id: 100, data: { ...completeSubmission, courseId: 9, actualWeek: 7, status: "submitted" } });
 
     expect(db.updateEvaluation).toHaveBeenCalledWith(100, expect.objectContaining({ status: "submitted" }));
   });
@@ -353,7 +360,7 @@ describe("校级督导的全校范围（回归用例）", () => {
     const caller = appRouter.createCaller(
       ctxFor({ role: "supervisor_expert", college: HUMANITIES, supervisorScope: "school" })
     );
-    await caller.evaluations.create({ courseId: 12, status: "submitted" });
+    await caller.evaluations.create({ ...completeSubmission, courseId: 12, status: "submitted" });
     expect(db.createEvaluation).toHaveBeenCalled();
   });
 
@@ -395,7 +402,7 @@ describe("附加角色为 JSON 字符串时的权限（回归用例）", () => {
         extraRoles: '["graduate_admin"]' as any,
       })
     );
-    await caller.evaluations.create({ courseId: 21, status: "submitted" });
+    await caller.evaluations.create({ ...completeSubmission, courseId: 21, status: "submitted" });
     expect(db.createEvaluation).toHaveBeenCalled();
   });
 

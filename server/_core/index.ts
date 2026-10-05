@@ -14,6 +14,7 @@ import { getCourseById, getEvaluationById, getAllUsers } from "../db";
 import { generatePrintableHtml } from "../exportUtils";
 import { hasAnyRole } from "@shared/roles";
 import { canViewEvaluation } from "@shared/evaluationAccess";
+import { isPasswordResetRequired } from "../passwords";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -60,7 +61,7 @@ async function startServer() {
       }
       // 权限验证：用 hasAnyRole 而不是比较 user.role —— 否则附加角色（extraRoles）不起作用
       const allowedRoles = ["graduate_admin", "admin", "college_secretary", "supervisor_expert", "supervisor_leader"];
-      if (!hasAnyRole(user as any, allowedRoles)) {
+      if (isPasswordResetRequired(user.password) || !hasAnyRole(user as any, allowedRoles)) {
         return res.status(403).send("<html><body style='font-family:sans-serif;padding:60px;text-align:center;'><h2>无权限访问</h2></body></html>");
       }
       const evalId = parseInt(req.params.id);

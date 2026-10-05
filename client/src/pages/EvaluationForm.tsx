@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { submissionErrors } from "@shared/evaluationValidation";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -411,7 +412,7 @@ export default function EvaluationForm() {
 
   // 验证表单是否完整
   const validateForm = (status: "draft" | "submitted"): { valid: boolean; errors: string[] } => {
-    const errors: string[] = [];
+    const errors: string[] = status === "submitted" ? submissionErrors(form) : [];
 
     // 如果是提交状态，检查所有必填项
     if (status === "submitted") {

@@ -19,6 +19,9 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { publicUser } from "./publicUser";
+import { hashPassword } from "./passwords";
+import { randomBytes } from "node:crypto";
+import { getScopedCollege, hasAnyRole } from "../shared/roles";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -159,10 +162,54 @@ export async function updateUserSupervisorScope(userId: number, scope: "school" 
 /**
  * 直接更新用户密码，不经过upsertUser，确保密码可靠写入数据库
  */
-export async function updateUserPassword(userId: number, newPassword: string) {
+export async function updateUserPassword(userId: number, newPassword: string, forceChange = false) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(users).set({ password: newPassword, updatedAt: new Date() }).where(eq(users.id, userId));
+  const password = await hashPassword(newPassword, forceChange);
+  await db.update(users).set({ password, updatedAt: new Date() }).where(eq(users.id, userId));
+  return password;
+}
+
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("数据库连接失败");
+  return (await db.select().from(users).where(eq(users.id, id)).limit(1))[0];
+}
+
+export type AccountProfile = Pick<InsertUser, "role" | "college" | "supervisorScope"> & { extraRoles: string[] };
+export function validateAccountProfile(profile: AccountProfile) {
+  getScopedCollege(profile);
+  if (profile.extraRoles.includes(profile.role || "")) throw new Error("主角色不能重复作为附加角色");
+}
+
+export async function saveAccountProfile(id: number, profile: AccountProfile, actorId: number) {
+  validateAccountProfile(profile);
+  if (id === actorId && !hasAnyRole(profile, ["graduate_admin", "admin"])) throw new Error("不能移除本人全部管理权限");
+  const db = await getDb();
+  if (!db) throw new Error("数据库连接失败");
+  await db.transaction(async tx => {
+    const target = (await tx.select({ id: users.id }).from(users).where(eq(users.id, id)).for("update"))[0];
+    if (!target) throw new Error("账号不存在");
+    await tx.update(users).set(profile).where(eq(users.id, id));
+  });
+}
+
+export async function createUserAccount(data: AccountProfile & { employeeId: string; name: string; password: string }) {
+  validateAccountProfile(data);
+  const db = await getDb();
+  if (!db) throw new Error("数据库连接失败");
+  const existing = await getUserByEmployeeId(data.employeeId);
+  if (existing) throw new Error("工号已存在，请修改原账号，不要重复创建");
+  const password = await hashPassword(data.password, true);
+  await db.insert(users).values({ ...data, password, openId: `emp_${data.employeeId}`, loginMethod: "employee_id" });
+}
+
+export async function disableUserAccount(id: number, actorId: number) {
+  if (id === actorId) throw new Error("不能停用本人账号");
+  const db = await getDb();
+  if (!db) throw new Error("数据库连接失败");
+  if (!(await getUserById(id))) throw new Error("账号不存在");
+  await db.update(users).set({ password: `disabled$${randomBytes(32).toString("hex")}` }).where(eq(users.id, id));
 }
 
 // ============================================================
@@ -360,7 +407,7 @@ export async function getDistinctTeachers(college?: string, semesterId?: number)
   if (!db) return [];
   const semesterFilter = await currentSemesterCourseFilter(semesterId);
   const parts = [
-    ...(college ? [eq(courses.college, college)] : []),
+    ...(college ? [or(...college.split(/[、,，]/).map(part => eq(courses.college, part.trim())))] : []),
     ...(semesterFilter ? [semesterFilter] : []),
   ];
   const where = parts.length > 0 ? and(...parts) : undefined;
@@ -379,9 +426,13 @@ export async function createListeningPlan(plan: InsertListeningPlan) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
+  return db.transaction(async tx => {
+    const semester = (await tx.select().from(semesters).where(eq(semesters.id, plan.semesterId!)).for("update"))[0];
+    const course = (await tx.select().from(courses).where(eq(courses.id, plan.courseId!)).for("update"))[0];
+    if (!semester?.isActive || course?.semesterId !== semester.id) throw new Error("课程或当前学期已变化，请刷新后重试");
   // 唯一性校验：同一督导+同一课程+同一周次只能有一条记录
   if (plan.planWeek != null) {
-    const existing = await db
+    const existing = await tx
       .select({ id: listeningPlans.id })
       .from(listeningPlans)
       .where(
@@ -397,14 +448,15 @@ export async function createListeningPlan(plan: InsertListeningPlan) {
     }
   }
 
-  await db.insert(listeningPlans).values(plan);
-  const result = await db
+  const [insert] = await tx.insert(listeningPlans).values(plan);
+  const result = await tx
     .select()
     .from(listeningPlans)
-    .where(and(eq(listeningPlans.supervisorId, plan.supervisorId!), eq(listeningPlans.courseId, plan.courseId!)))
+    .where(eq(listeningPlans.id, insert.insertId))
     .orderBy(desc(listeningPlans.createdAt))
     .limit(1);
   return result[0];
+  });
 }
 
 /**
@@ -498,7 +550,7 @@ export async function updateListeningPlanStatus(planId: number, status: "pending
 /**
  * 评价提交为"已提交"时，自动把对应督导专家在该课程下的待听课计划标记为"已评价"，
  * 避免出现"评价已提交但待听课列表仍显示该课程"的问题。
- * 优先匹配周次一致的计划，否则匹配任意一条待听课计划（含未指定周次的）。
+ * 只匹配对应周次或未指定周次的计划，不能完成其他周的计划。
  * 返回被更新的 planId（若有），供写回 courseEvaluations.planId 使用。
  */
 export async function completePendingPlanForEvaluation(
@@ -525,7 +577,9 @@ export async function completePendingPlanForEvaluation(
   const matched =
     (actualWeek != null && pendingPlans.find((p) => p.planWeek === actualWeek)) ||
     pendingPlans.find((p) => p.planWeek == null) ||
-    pendingPlans[0];
+    (actualWeek == null ? pendingPlans[0] : undefined);
+
+  if (!matched) return null;
 
   await db.update(listeningPlans).set({ status: "completed" }).where(eq(listeningPlans.id, matched.id));
   return matched.id;
@@ -543,14 +597,19 @@ export async function createEvaluation(evaluation: InsertCourseEvaluation) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   
-  await db.insert(courseEvaluations).values(evaluation);
-  const result = await db
+  return db.transaction(async tx => {
+  const semester = (await tx.select().from(semesters).where(eq(semesters.id, evaluation.semesterId!)).for("update"))[0];
+  const course = (await tx.select().from(courses).where(eq(courses.id, evaluation.courseId)).for("update"))[0];
+  if (!semester?.isActive || course?.semesterId !== semester.id) throw new Error("课程或当前学期已变化，请刷新后重试");
+  const [insert] = await tx.insert(courseEvaluations).values(evaluation);
+  const result = await tx
     .select()
     .from(courseEvaluations)
-    .where(eq(courseEvaluations.supervisorId, evaluation.supervisorId!))
+    .where(eq(courseEvaluations.id, insert.insertId))
     .orderBy(desc(courseEvaluations.createdAt))
     .limit(1);
   return result[0];
+  });
 }
 
 export async function updateEvaluation(id: number, data: Partial<InsertCourseEvaluation>) {

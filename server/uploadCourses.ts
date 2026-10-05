@@ -1,195 +1,64 @@
-/**
- * 课程数据上传路由
- * POST /api/upload-courses
- * 仅研究生院主管（graduate_admin）和 admin 可访问
- *
- * 解析逻辑与命令行导入工具（scripts/import-courses.ts）共用 server/courseImport.ts，
- * 两条路径必须同源：此前上传接口自己按列序号解析，既读不了 MBA 课表，
- * 也会在换学期后把归档的旧课表当成「新课表里没有的课」删掉。
- *
- * 核心策略：限定在当前学期内 UPSERT（保持 ID 稳定）
- * - 用「学院+课程名+教师+星期+节次+教室」作为唯一标识
- * - 已存在的课程：保留原 ID，仅更新内容字段
- * - 新增课程：插入并分配新 ID
- * - 文件里未出现的课程仍保留，上传不承担清理历史数据的职责
- * - 其他学期（已归档）的课程一律不动
- * 这样可确保 course_evaluations 和 listening_plans 的 courseId 关联不断裂
- */
-
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import multer from "multer";
-import { getDb, getActiveSemester } from "./db";
-import { courses } from "../drizzle/schema";
-import { sql, eq, and, isNull, or, inArray } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { eq, inArray } from "drizzle-orm";
+import { courses, courseEvaluations, listeningPlans, semesters } from "../drizzle/schema";
+import { getDb } from "./db";
 import { sdk } from "./_core/sdk";
-import { parseCourseWorkbook, mergeDuplicateCourses, courseKey } from "./courseImport";
+import { ENV } from "./_core/env";
 import { hasAnyRole } from "@shared/roles";
+import { isPasswordResetRequired } from "./passwords";
+import { mergeDuplicateCourses, parseCourseWorkbook } from "./courseImport";
+import { courseUploadPlan, signUploadPreview, verifyUploadPreview, uploadFingerprint, type ExistingCourse } from "./courseUploadPlan";
 
 const router = Router();
-
-// multer 内存存储（文件不落盘，直接在内存中处理）
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB 限制
-  fileFilter: (_req, file, cb) => {
-    const ext = file.originalname.toLowerCase();
-    if (ext.endsWith(".xls") || ext.endsWith(".xlsx")) {
-      cb(null, true);
-    } else {
-      cb(new Error("只支持 .xls 或 .xlsx 格式的文件"));
-    }
-  },
-});
-
-// ============================================================
-// 上传接口
-// ============================================================
-router.post(
-  "/api/upload-courses",
-  async (req: Request, res: Response, next) => {
-    // 权限验证：仅 graduate_admin 和 admin 可访问
-    try {
-      const user = await sdk.authenticateRequest(req);
-      // hasAnyRole：否则「主角色普通用户 + 附加角色研究生院主管」会被挡在外面
-      if (!hasAnyRole(user as any, ["graduate_admin", "admin"])) {
-        return res.status(403).json({
-          success: false,
-          message: "权限不足，仅研究生院主管可上传课程数据",
-        });
-      }
-      (req as any).uploadUser = user;
-    } catch {
-      return res.status(401).json({ success: false, message: "请先登录" });
-    }
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 4 }, fileFilter: (_req, file, cb) => cb(null, /\.xlsx?$/i.test(file.originalname)) });
+router.post("/api/upload-courses", async (req, res, next) => {
+  try {
+    const user = await sdk.authenticateRequest(req);
+    if (!hasAnyRole(user, ["graduate_admin", "admin"]) || isPasswordResetRequired(user.password)) { res.status(403).json({ success: false, message: "请先修改初始密码；课表导入仅限研究生院主管或管理员" }); return; }
+    res.locals.actor = user.id;
     next();
-  },
-  upload.single("file"),
-  async (req: Request, res: Response) => {
-    try {
-      if (!req.file) {
-        return res
-          .status(400)
-          .json({ success: false, message: "请选择要上传的文件" });
-      }
-
-      // ---- 解析（与命令行导入工具同一套解析器）----
-      const active = await getActiveSemester();
-      if (!active || Number(req.body.semesterId) !== active.id) {
-        return res.status(400).json({ success: false, message: "仅可更新当前学期，请刷新页面后确认所选学期" });
-      }
-      let parsed;
-      try {
-        parsed = parseCourseWorkbook(req.file.buffer, {
-          // MBA 课表按日期换算周次，需要当前学期的起始日
-          semesterStartDate: active?.startDate,
-          totalWeeks: active?.totalWeeks,
-        });
-      } catch (err: any) {
-        return res
-          .status(400)
-          .json({ success: false, message: err.message || "文件解析失败" });
-      }
-
-      // key 相同的记录合并，周次取并集（真实课表里同一门课会按周次拆成多行）
-      const { merged: newCourseData } = mergeDuplicateCourses(parsed.courses);
-      if (newCourseData.some(c => c.academicYear !== active.academicYear || c.semester !== active.name)) {
-        return res.status(400).json({ success: false, message: "课表所属学期与当前学期不一致，已停止，未修改任何数据" });
-      }
-      if (newCourseData.length === 0) {
-        return res
-          .status(400)
-          .json({ success: false, message: "未找到有效课程数据，请检查文件格式" });
-      }
-
-      const teacherSet = new Set(newCourseData.map((r) => r.teacher).filter(Boolean));
-      const collegeSet = new Set(newCourseData.map((r) => r.college).filter(Boolean));
-
-      const db = await getDb();
-      if (!db) {
-        return res
-          .status(500)
-          .json({ success: false, message: "数据库连接失败" });
-      }
-
-      // ---- UPSERT：严格限定在当前学期内 ----
-      // 归档学期的课程绝不参与比对，更不会被当成「新课表里没有的课」删掉
-      const semesterScope = eq(courses.semesterId, active.id);
-      const existingCourses = await db.select().from(courses).where(semesterScope);
-
-      const existingKeyMap = new Map<string, number>();
-      for (const c of existingCourses) existingKeyMap.set(courseKey(c as any), c.id);
-
-      const toUpdate: Array<{ id: number; data: (typeof newCourseData)[0] }> = [];
-      const toInsert: Array<(typeof newCourseData)[0]> = [];
-      const matchedIds = new Set<number>();
-
-      for (const nc of newCourseData) {
-        const id = existingKeyMap.get(courseKey(nc));
-        if (id !== undefined) {
-          toUpdate.push({ id, data: nc });
-          matchedIds.add(id);
-        } else {
-          toInsert.push(nc);
-        }
-      }
-
-      // 当前学期内、新课表里已不存在的课程
-      const toDeleteIds = existingCourses.map((c) => c.id).filter((id) => !matchedIds.has(id));
-
-      // 不删除任何课程。两份课表分次上传，也不会把另一份的课程清空。
-
-      const semesterId = active?.id ?? null;
-
-      for (const { id, data } of toUpdate) {
-        await db
-          .update(courses)
-          .set({ ...data, semesterId })
-          .where(eq(courses.id, id));
-      }
-
-      if (toInsert.length > 0) {
-        const batchSize = 100;
-        for (let i = 0; i < toInsert.length; i += batchSize) {
-          await db.insert(courses).values(
-            toInsert.slice(i, i + batchSize).map((c) => ({ ...c, semesterId }))
-          );
-        }
-      }
-
-
-      // 统计的是当前学期的课程数，与「全校课程」列表口径一致
-      const [finalStats] = await db
-        .select({
-          total: sql<number>`count(*)`,
-          teachers: sql<number>`count(distinct ${courses.teacher})`,
-          colleges: sql<number>`count(distinct ${courses.college})`,
-        })
-        .from(courses)
-        .where(semesterScope);
-
-      const formatLabel = parsed.format === "mba" ? "MBA 课表" : "研究生排课信息表";
-      return res.json({
-        success: true,
-        message: `课程数据更新成功（识别为${formatLabel}）`,
-        warnings: parsed.warnings,
-        stats: {
-          total: Number(finalStats?.total ?? newCourseData.length),
-          teachers: Number(finalStats?.teachers ?? teacherSet.size),
-          colleges: Number(finalStats?.colleges ?? collegeSet.size),
-          updated: toUpdate.length,
-          inserted: toInsert.length,
-          deleted: 0,
-          preserved: toDeleteIds.length,
-        },
-      });
-    } catch (err: any) {
-      console.error("[upload-courses] 错误:", err);
-      return res.status(500).json({
-        success: false,
-        message: "服务器内部错误：" + (err.message || "未知错误"),
-      });
-    }
+  } catch { res.status(401).json({ success: false, message: "请先登录" }); }
+}, (req, res, next) => upload.single("file")(req, res, error => {
+  if (error) { res.status(400).json({ success: false, message: "上传失败，请检查文件格式及20MB大小限制" }); return; }
+  next();
+}), async (req, res) => {
+  try {
+    if (!req.file) throw new Error("请选择 .xls 或 .xlsx 课表文件");
+    if (!["preview", "apply"].includes(req.body.action) || !["standard", "mba"].includes(req.body.format)) throw new Error("请选择对应的课表入口并先预览");
+    const semesterId = Number(req.body.semesterId);
+    if (!Number.isInteger(semesterId) || semesterId < 1) throw new Error("请选择有效学期");
+    const db = await getDb();
+    if (!db) throw new Error("数据库连接失败");
+    const result = await db.transaction(async tx => {
+      // 同一学期的导入串行处理；学期启用操作亦锁定 semesters 表。
+      const semester = (await tx.select().from(semesters).where(eq(semesters.id, semesterId)).for("update"))[0];
+      if (!semester?.isActive) throw new Error("只允许导入当前学期，请刷新后重新预览");
+      const parsed = parseCourseWorkbook(req.file!.buffer, { semesterStartDate: semester.startDate, totalWeeks: semester.totalWeeks });
+      if (parsed.format !== req.body.format) throw new Error("文件格式与上传入口不一致");
+      const incoming = mergeDuplicateCourses(parsed.courses).merged;
+      if (!incoming.length || incoming.some(course => course.academicYear !== semester.academicYear || course.semester !== semester.name)) throw new Error("课表无有效课程或所属学期与目标不一致");
+      const existing = await tx.select().from(courses).where(eq(courses.semesterId, semesterId)).orderBy(courses.id).for("update");
+      const ids = existing.map(course => course.id);
+      const evaluations = ids.length ? await tx.select({ id: courseEvaluations.id, courseId: courseEvaluations.courseId }).from(courseEvaluations).where(inArray(courseEvaluations.courseId, ids)).orderBy(courseEvaluations.id).for("update") : [];
+      const plans = ids.length ? await tx.select({ id: listeningPlans.id, courseId: listeningPlans.courseId }).from(listeningPlans).where(inArray(listeningPlans.courseId, ids)).orderBy(listeningPlans.id).for("update") : [];
+      const plan = courseUploadPlan(incoming, existing as ExistingCourse[], new Set([...evaluations, ...plans].map(row => row.courseId)), parsed.format);
+      const binding = { file: createHash("sha256").update(req.file!.buffer).digest("hex"), state: uploadFingerprint({ semester, existing, evaluations, plans }), actor: res.locals.actor as number, semesterId, format: parsed.format };
+      const summary = { sourceRows: parsed.sourceRows, total: incoming.length, inserted: plan.inserts.length, updated: plan.updates.length, unchanged: plan.unchanged, preserved: plan.preserved, conflicts: plan.conflicts, warnings: parsed.warnings };
+      if (req.body.action === "preview") return { success: true, applied: false, message: "预览完成，尚未写入课表", summary, previewToken: signUploadPreview(binding, ENV.cookieSecret) };
+      verifyUploadPreview(String(req.body.previewToken || ""), binding, ENV.cookieSecret);
+      if (plan.conflicts.length) throw new Error("存在课程关联冲突，未写入任何数据，请按预览清单核实");
+      for (const item of plan.updates) await tx.update(courses).set({ ...item.data, semesterId }).where(eq(courses.id, item.id));
+      for (let index = 0; index < plan.inserts.length; index += 100) await tx.insert(courses).values(plan.inserts.slice(index, index + 100).map(course => ({ ...course, semesterId })));
+      return { success: true, applied: true, message: "课程导入完成。旧课表已归档保留，未删除任何历史数据；已有评价或计划的课程未覆盖。", summary };
+    });
+    res.json(result);
+  } catch (error) {
+    // 不把数据库连接串或内部 SQL 错误返回到页面。
+    const message = error instanceof Error ? error.message : "导入失败";
+    const expected = /课表|课程|预览|文件|学期|上传|请选择|会话密钥/.test(message);
+    res.status(400).json({ success: false, message: expected ? message : "导入失败，事务已回滚；请联系管理员核查" });
   }
-);
-
+});
 export default router;

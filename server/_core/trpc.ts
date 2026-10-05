@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import { ASSIGNABLE_ROLES, hasAnyRole } from "@shared/roles";
+import { isAccountDisabled, isPasswordResetRequired } from "../passwords";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -19,6 +20,10 @@ const requireUser = t.middleware(async opts => {
   }
   if (!hasAnyRole(ctx.user, ASSIGNABLE_ROLES)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "账号尚未配置业务角色，请联系管理员" });
+  }
+  if (isAccountDisabled(ctx.user.password)) throw new TRPCError({ code: "FORBIDDEN", message: "账号已停用" });
+  if (isPasswordResetRequired(ctx.user.password) && opts.path !== "auth.changePassword") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "请先修改初始或重置密码" });
   }
 
   return next({
