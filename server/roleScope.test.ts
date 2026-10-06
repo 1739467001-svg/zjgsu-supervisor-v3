@@ -9,8 +9,17 @@ import * as db from "./db";
 import { REQUIRED_SCORE_FIELDS } from "../shared/evaluationValidation";
 const completeSubmission = { ...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key => [key, 4])), score_research_teaching: 4, overallScore: 4, highlights: "测试亮点", suggestions: "测试建议", actualWeek: 7 };
 
+describe("首页课程计数范围", () => {
+  it.each(["supervisor_expert", "college_secretary"])("%s 的计数仅限本院", async role => {
+    const caller = appRouter.createCaller(ctxFor({ role, college: "工商管理学院", supervisorScope: "college" }));
+    await caller.stats.courseCount({ semesterId: 1 });
+    expect(db.getCourses).toHaveBeenCalledWith(expect.objectContaining({ college: "工商管理学院", semesterId: 1 }));
+  });
+});
+
 vi.mock("./db", () => ({
   getCourses: vi.fn().mockResolvedValue({ data: [], total: 0 }),
+  getSemesterById: vi.fn().mockResolvedValue({ id: 1 }),
   getActiveSemester: vi.fn().mockResolvedValue({ id: 1, academicYear: "2025-2026", name: "第二学期", startDate: "2026-03-02", totalWeeks: 19 }),
   listSemesters: vi.fn().mockResolvedValue([]),
   createSemester: vi.fn().mockResolvedValue({ id: 1 }),

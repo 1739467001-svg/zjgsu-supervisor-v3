@@ -55,7 +55,7 @@ export default function Dashboard() {
     enabled: isSecretary,
   });
 
-  // 动态获取全校课程总数（督导专家/组长角色使用）
+  // 与当前用户可浏览的课程范围一致。
   const { data: courseCountData } = trpc.stats.courseCount.useQuery({ semesterId }, {
     enabled: canSupervise,
   });
@@ -125,7 +125,7 @@ export default function Dashboard() {
                 action: () => {},
               },
               {
-                label: "全校课程",
+                label: !canViewAdminStats && (isSecretary || scopeLabel === "院级") ? "本院课程" : "全校课程",
                 value: totalCourseCount,
                 icon: <BookOpen className="w-5 h-5" />,
                 color: "oklch(0.52 0.16 200)",

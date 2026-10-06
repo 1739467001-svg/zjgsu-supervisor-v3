@@ -667,9 +667,9 @@ export const appRouter = router({
     allCollegeProgress: adminProcedure.input(semesterInput).query(async ({ input }) => {
       return getAllCollegeEvaluationProgress(await selectedSemesterId(input?.semesterId));
     }),
-    // 全校课程总数（所有已登录用户可查）
-    courseCount: protectedProcedure.input(semesterInput).query(async ({ input }) => {
-      const result = await getCourses({ page: 1, pageSize: 1, semesterId: await selectedSemesterId(input?.semesterId) });
+    // 与当前用户课程列表使用相同学院范围。
+    courseCount: protectedProcedure.input(semesterInput).query(async ({ input, ctx }) => {
+      const result = await getCourses({ page: 1, pageSize: 1, college: getScopedCollege(ctx.user) || undefined, semesterId: await selectedSemesterId(input?.semesterId) });
       return { total: result.total };
     }),
   }),
