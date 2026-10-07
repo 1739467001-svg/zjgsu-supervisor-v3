@@ -147,6 +147,36 @@ describe.skipIf(!TEST_URL)("数据库集成测试", () => {
       });
     }
 
+    it("通讯录学院全称能查到简称课程，列表、教师与进度保持一致", async () => {
+      const id = await seedCourse("管理工程与电子商务学院");
+      await seedCourse("工商管理学院");
+      const college = "管理工程与电子商务学院（跨境电商学院）";
+      const list = await dbMod.getCourses({ college });
+      expect(list.total).toBe(1);
+      expect(list.data.map(row => row.id)).toEqual([id]);
+      expect(await dbMod.getDistinctTeachers(college)).toEqual(["某老师"]);
+      expect((await dbMod.getCourseEvaluationProgress(college)).map(row => row.id)).toEqual([id]);
+    });
+
+    it("MBA查询及评价范围不包含工商管理合写课程或孤儿评价", async () => {
+      const mba = await seedCourse("MBA学院");
+      const business = await seedCourse("工商管理学院（MBA学院）");
+      await seedEval(mba, 4);
+      await seedEval(business, 4);
+      await seedEval(999999, 4);
+      expect((await dbMod.getCourses({ college: "MBA学院" })).data.map(row => row.id)).toEqual([mba]);
+      expect((await dbMod.getAllEvaluations({ college: "MBA学院" })).map(row => row.courseId)).toEqual([mba]);
+    });
+
+    it("没有对应学院及包含SQL通配符的学院范围不能放大查询结果", async () => {
+      await seedCourse("经济学院");
+      for (const college of ["不存在的学院", "%", "_"]) {
+        expect((await dbMod.getCourses({ college })).total).toBe(0);
+        expect(await dbMod.getDistinctTeachers(college)).toEqual([]);
+        expect(await dbMod.getCourseEvaluationProgress(college)).toEqual([]);
+      }
+    });
+
     it("有评价但一条总分都没打的学院，仍然出现在统计里（此前会从平均分图表消失，导致三张图学院数不一致）", async () => {
       const scored = await seedCourse("经济学院");
       const unscored = await seedCourse("未来传播学院");

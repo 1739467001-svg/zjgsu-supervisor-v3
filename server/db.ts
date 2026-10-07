@@ -21,7 +21,7 @@ import { ENV } from "./_core/env";
 import { publicUser } from "./publicUser";
 import { hashPassword, isAccountDisabled, isPasswordResetRequired } from "./passwords";
 import { randomBytes } from "node:crypto";
-import { getScopedCollege, hasAnyRole } from "../shared/roles";
+import { getScopedCollege, hasAnyRole, isCollegeInScope } from "../shared/roles";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -325,6 +325,15 @@ export async function updateSemester(id: number, data: Partial<InsertSemester>) 
 // ============================================================
 // 课程相关
 // ============================================================
+/** 用实际学院名称生成查询条件，与详情、统计及人员导入的范围判定保持一致。 */
+async function courseCollegeFilter(college: string) {
+  const db = await getDb();
+  if (!db) return sql`false`;
+  const names = await db.selectDistinct({ college: courses.college }).from(courses);
+  const matched = names.map(row => row.college).filter((name): name is string => !!name && isCollegeInScope(college, name));
+  return matched.length ? inArray(courses.college, matched) : sql`false`;
+}
+
 export async function getCourses(filters: {
   college?: string;
   campus?: string;
@@ -347,17 +356,9 @@ export async function getCourses(filters: {
     if (semesterFilter) conditions.push(semesterFilter);
   }
   // 严格过滤：只有非空字符串才作为筛选条件
-  // 学院支持多学院字符串（顿号/逗号分隔，供学院秘书/院级督导多学院场景使用），用模糊匹配逐一比对
+  // 学院全称、简称及多学院范围共用权限匹配规则；不把范围作为SQL模糊表达式。
   if (filters.college && filters.college.trim()) {
-    const collegeList = filters.college
-      .split(/[、,，]/)
-      .map((c) => c.trim())
-      .filter(Boolean);
-    if (collegeList.length === 1) {
-      conditions.push(like(courses.college, `%${collegeList[0]}%`));
-    } else if (collegeList.length > 1) {
-      conditions.push(or(...collegeList.map((c) => like(courses.college, `%${c}%`)))!);
-    }
+    conditions.push(await courseCollegeFilter(filters.college));
   }
   if (filters.campus && filters.campus.trim()) conditions.push(eq(courses.campus, filters.campus.trim()));
   if (filters.weekday && filters.weekday.trim()) conditions.push(eq(courses.weekday, filters.weekday.trim()));
@@ -415,7 +416,7 @@ export async function getDistinctTeachers(college?: string, semesterId?: number)
   if (!db) return [];
   const semesterFilter = await currentSemesterCourseFilter(semesterId);
   const parts = [
-    ...(college ? [or(...college.split(/[、,，]/).map(part => eq(courses.college, part.trim())))] : []),
+    ...(college ? [await courseCollegeFilter(college)] : []),
     ...(semesterFilter ? [semesterFilter] : []),
   ];
   const where = parts.length > 0 ? and(...parts) : undefined;
@@ -682,14 +683,7 @@ export async function getAllEvaluations(filters?: { college?: string; supervisor
 
   // 按学院过滤（支持秘书的多学院字段，用顿号/逗号分隔）
   if (filters?.college) {
-    const filterColleges = filters.college
-      .split(/[、,，]/)
-      .map((c) => c.trim().replace(/（.*?）/g, "").replace(/\(.*?\)/g, ""))
-      .filter(Boolean);
-    return enriched.filter((e) => {
-      const courseCollege = (e.course?.college || "").replace(/（.*?）/g, "").replace(/\(.*?\)/g, "").trim();
-      return filterColleges.some((fc) => courseCollege.includes(fc) || fc.includes(courseCollege));
-    });
+    return enriched.filter(e => isCollegeInScope(filters.college!, e.course?.college));
   }
   return enriched;
 }
@@ -905,16 +899,7 @@ export async function getCourseEvaluationProgress(college?: string, semesterId?:
   const semesterFilter = await currentSemesterCourseFilter(semesterId);
   if (semesterFilter) conditions.push(semesterFilter);
   if (college) {
-    // 支持多学院字符串（顿号/逗号分隔）
-    const colleges = college
-      .split(/[、,，]/)
-      .map((c) => c.trim())
-      .filter(Boolean);
-    if (colleges.length === 1) {
-      conditions.push(like(courses.college, `%${colleges[0]}%`));
-    } else {
-      conditions.push(or(...colleges.map((c) => like(courses.college, `%${c}%`)))!);
-    }
+    conditions.push(await courseCollegeFilter(college));
   }
 
   const allCourses = await db
