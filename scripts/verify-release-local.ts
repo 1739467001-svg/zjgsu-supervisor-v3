@@ -31,7 +31,11 @@ try{
   await root.query(`INSERT INTO \`${database}\`.users (openId,employeeId,name,role,password) VALUES ('rollback-local-only','rollback-local-only','虚构发布验收','admin',?)`,[await hashPassword(loginPassword)]);
   await root.query(`INSERT INTO \`${database}\`.semesters (academicYear,name,startDate,totalWeeks,isActive) VALUES ('2026-2027','发布回滚虚构学期','2026-09-14',18,1)`);
   await root.query(`CREATE USER '${account}'@'127.0.0.1' IDENTIFIED BY ?`,[password]);await root.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON \`${database}\`.* TO '${account}'@'127.0.0.1'`);
-  await fs.symlink(old.target,path.join(rootPath,'current'));await restart(old);assert(await health(old),'真实82a3c92旧构建启动、登录、数据库学期读取通过');
+  const current=path.join(rootPath,'current');
+  const existing=await fs.lstat(current).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;return null;});
+  if(existing){if(!existing.isSymbolicLink()||await fs.realpath(current)!==old.target)throw new Error('演练目录current不是已验证的旧构建，停止以免覆盖');}
+  else await fs.symlink(old.target,current);
+  await restart(old);assert(await health(old),'真实82a3c92旧构建启动、登录、数据库学期读取通过');
   const updated=await activateRelease({root:rootPath,target:next.target,restart,health});assert(updated.revision===newRevision&&await health(next),'新构建真实进程启动与版本健康检查通过');
   assert(await fs.realpath(path.join(rootPath,'previous'))===old.target,'旧版本与旧构建保留');
   await activateRelease({root:rootPath,target:old.target,restart,health});assert(await health(old),'显式代码回滚后旧服务真实登录与数据库查询通过');
@@ -43,4 +47,5 @@ try{
   await restart(next);assert(await health(next),'重新启动候选版本健康');
   const occupied=spawn(process.execPath,['dist/index.js'],{cwd:next.target,env,stdio:'ignore'});assert((await once(occupied,'exit'))[0]===1&&await health(next),'端口占用时新进程失败，不改端口或影响原进程');
   const report={passed,database,oldRevision,newRevision,productionDependencies:true,result:'PASS'};await fs.writeFile('tmp/acceptance/release-report.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
-}finally{await stop();await root.query(`DROP USER IF EXISTS '${account}'@'127.0.0.1'`);await root.end();}
+}catch(error){console.error(error instanceof Error && !('sql' in error) ? error.message : '本地发布演练未完成，请核查隔离环境');process.exitCode=1;}
+finally{await stop();await root.query(`DROP USER IF EXISTS '${account}'@'127.0.0.1'`);await root.end();}

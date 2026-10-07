@@ -44,6 +44,7 @@ vi.mock("./db", () => ({
   createListeningPlan: vi.fn().mockResolvedValue({ id: 1 }),
   deleteListeningPlan: vi.fn().mockResolvedValue(undefined),
   updateListeningPlanStatus: vi.fn().mockResolvedValue(undefined),
+  updateListeningPlan: vi.fn().mockResolvedValue(undefined),
   completePendingPlanForEvaluation: vi.fn().mockResolvedValue(null),
   getUsedWeeksForCourse: vi.fn().mockResolvedValue({ usedWeeks: [], evaluatedWeeks: [] }),
   getEvaluationsBySupervisor: vi.fn().mockResolvedValue([]),
@@ -108,6 +109,47 @@ function ctxFor(user: Partial<any>): TrpcContext {
 
 const HUMANITIES = "人文学院";
 const STATS = "统计与数据科学学院";
+
+describe("待听课计划修改", () => {
+  const pending = { id: 555, supervisorId: 44, courseId: 9, semesterId: 1, planWeek: 7, status: "pending" };
+  const course = { id: 9, semesterId: 1, college: HUMANITIES, weekNumbers: [7, 8] };
+  it("本人可修改当前学期待听课计划周次和备注", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce(pending as any);
+    vi.mocked(db.getCourseById).mockResolvedValueOnce(course as any);
+    const caller = appRouter.createCaller(ctxFor({ id: 44 }));
+    await expect(caller.plans.update({ planId: 555, planWeek: 8, note: " 改为第八周 " })).resolves.toEqual({ success: true });
+    expect(db.updateListeningPlan).toHaveBeenCalledWith(555, { planWeek: 8, note: "改为第八周" });
+  });
+  it("不允许修改其他督导的计划", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce(pending as any);
+    await expect(appRouter.createCaller(ctxFor({ id: 45 })).plans.update({ planId: 555, planWeek: 8, note: "" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(db.updateListeningPlan).not.toHaveBeenCalled();
+  });
+  it("院级督导不能修改外院计划", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce(pending as any);
+    vi.mocked(db.getCourseById).mockResolvedValueOnce(course as any);
+    await expect(appRouter.createCaller(ctxFor({ id: 44, supervisorScope: "college", college: STATS })).plans.update({ planId: 555, planWeek: 8, note: "" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(db.updateListeningPlan).not.toHaveBeenCalled();
+  });
+  it("不能把周次改到课程未排课的周", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce(pending as any);
+    vi.mocked(db.getCourseById).mockResolvedValueOnce(course as any);
+    await expect(appRouter.createCaller(ctxFor({ id: 44 })).plans.update({ planId: 555, planWeek: 9, note: "" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(db.updateListeningPlan).not.toHaveBeenCalled();
+  });
+  it("历史计划不可修改", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce({ ...pending, semesterId: 2 } as any);
+    vi.mocked(db.getCourseById).mockResolvedValueOnce({ ...course, semesterId: 2 } as any);
+    await expect(appRouter.createCaller(ctxFor({ id: 44 })).plans.update({ planId: 555, planWeek: 8, note: "" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(db.updateListeningPlan).not.toHaveBeenCalled();
+  });
+  it("已评价计划不可修改", async () => {
+    vi.mocked(db.getListeningPlanById).mockResolvedValueOnce({ ...pending, status: "completed" } as any);
+    vi.mocked(db.getCourseById).mockResolvedValueOnce(course as any);
+    await expect(appRouter.createCaller(ctxFor({ id: 44 })).plans.update({ planId: 555, planWeek: 8, note: "" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(db.updateListeningPlan).not.toHaveBeenCalled();
+  });
+});
 
 describe("缺失学院配置时拒绝扩大范围", () => {
   it.each(["college_secretary", "supervisor_expert", "supervisor_leader"])("%s 不能退化成全校课程查询", async role => {

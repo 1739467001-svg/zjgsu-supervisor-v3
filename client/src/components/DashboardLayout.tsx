@@ -1,7 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import SemesterSwitcher from "./SemesterSwitcher";
 import { useActiveRole } from "@/hooks/useActiveRole";
-import { ROLE_LABELS, getSupervisorScopeLabel, isSupervisorRole } from "@shared/roles";
+import { ROLE_LABELS, getSupervisorScopeLabel, isSupervisorRole, hasAnyRole, isCollegeScopedSupervisor } from "@shared/roles";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -180,7 +180,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: { children: React
   };
 
   const role = activeRole;
-  const menuItems = getMenuItemsForRoles(effectiveRoles);
+  const collegeOnly = !hasAnyRole(user, ["graduate_admin", "admin"]) && (hasAnyRole(user, ["college_secretary"]) || isCollegeScopedSupervisor(user));
+  const menuItems = getMenuItemsForRoles(effectiveRoles).map(item => item.key === "courses" && collegeOnly ? { ...item, label: "本院课程" } : item);
 
   // 督导角色才带校级/院级后缀；其余角色直接用角色名，避免把同一身份写两遍
   const scopeLabel = getSupervisorScopeLabel(user as any);

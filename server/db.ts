@@ -518,27 +518,17 @@ export async function getListeningPlansBySupervisor(supervisorId: number, semest
   const courseList = await db.select().from(courses).where(inArray(courses.id, courseIds));
   const courseMap = new Map(courseList.map((c) => [c.id, c]));
 
-  // 关联评价 ID 和状态：查询该督导专家对这些课程的评价记录
+  // 优先按明确计划关联，旧记录仅按同课程同周次匹配；不能带入其他周的评价。
   const evaluationList = await db
-    .select({ id: courseEvaluations.id, courseId: courseEvaluations.courseId, supervisorId: courseEvaluations.supervisorId, status: courseEvaluations.status })
+    .select({ id: courseEvaluations.id, courseId: courseEvaluations.courseId, planId: courseEvaluations.planId, actualWeek: courseEvaluations.actualWeek, status: courseEvaluations.status })
     .from(courseEvaluations)
-    .where(eq(courseEvaluations.supervisorId, supervisorId))
+    .where(and(eq(courseEvaluations.supervisorId, supervisorId), inArray(courseEvaluations.courseId, courseIds), semesterId == null ? undefined : eq(courseEvaluations.semesterId, semesterId)))
     .orderBy(desc(courseEvaluations.createdAt));
-  // 按 courseId 建立映射（同一课程可能有多条评价，取最新的一条，同时记录评价状态）
-  const evaluationMap = new Map<number, { id: number; status: string }>();
-  for (const ev of evaluationList) {
-    // 由于查询结果已按 createdAt desc 排序，第一次遇到的就是最新的
-    if (!evaluationMap.has(ev.courseId)) {
-      evaluationMap.set(ev.courseId, { id: ev.id, status: ev.status || 'draft' });
-    }
-  }
-
-  return plans.map((p) => ({
-    ...p,
-    course: courseMap.get(p.courseId),
-    evaluationId: evaluationMap.get(p.courseId)?.id ?? null,
-    evaluationStatus: evaluationMap.get(p.courseId)?.status ?? null,
-  }));
+  return plans.map(p => {
+    const evaluation = evaluationList.find(ev => ev.planId === p.id)
+      || evaluationList.find(ev => ev.planId == null && ev.courseId === p.courseId && p.planWeek != null && ev.actualWeek === p.planWeek);
+    return { ...p, course: courseMap.get(p.courseId), evaluationId: evaluation?.id ?? null, evaluationStatus: evaluation?.status ?? null };
+  });
 }
 
 /** 按 id 取听课计划，用于改动前校验归属人 */
@@ -551,6 +541,20 @@ export async function getListeningPlanById(planId: number) {
 
 export async function updateListeningPlanStatus(planId: number, status: "pending" | "completed" | "cancelled") {
   await mutateCurrentRecord("plan", planId, async tx => { await tx.update(listeningPlans).set({ status }).where(eq(listeningPlans.id, planId)); });
+}
+
+export async function updateListeningPlan(planId: number, data: { planWeek: number | null; note: string }) {
+  await mutateCurrentRecord("plan", planId, async tx => {
+    const plan = (await tx.select().from(listeningPlans).where(eq(listeningPlans.id, planId)))[0];
+    const linked = await tx.select({ id: courseEvaluations.id }).from(courseEvaluations).where(eq(courseEvaluations.planId, planId)).limit(1);
+    if (plan.status !== "pending" || linked.length) throw new Error("只有尚未关联评价的待听课计划可以修改");
+    if (data.planWeek != null) {
+      const plans = await tx.select().from(listeningPlans).where(and(eq(listeningPlans.courseId, plan.courseId), eq(listeningPlans.supervisorId, plan.supervisorId), eq(listeningPlans.planWeek, data.planWeek)));
+      const evaluations = await tx.select({ id: courseEvaluations.id }).from(courseEvaluations).where(and(eq(courseEvaluations.courseId, plan.courseId), eq(courseEvaluations.supervisorId, plan.supervisorId), eq(courseEvaluations.actualWeek, data.planWeek))).limit(1);
+      if (evaluations.length || plans.some((row: typeof listeningPlans.$inferSelect) => row.id !== planId)) throw new Error("该周已有本人计划或评价，请选择其他周次");
+    }
+    await tx.update(listeningPlans).set(data).where(eq(listeningPlans.id, planId));
+  });
 }
 
 /**

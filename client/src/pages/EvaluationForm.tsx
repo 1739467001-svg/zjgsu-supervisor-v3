@@ -502,7 +502,7 @@ export default function EvaluationForm() {
       <div className="p-4 sm:p-6 max-w-4xl mx-auto page-transition">
         {/* 表单头部 - 返回按针和保存状态 */}
         <div className="flex items-center justify-between mb-5">
-          <button onClick={() => navigate(isEditMode ? '/evaluations' : -1 as any)} className="flex items-center gap-1.5 text-sm hover:opacity-70 transition-opacity" style={{ color: "oklch(0.35 0.13 245)" }}>
+          <button onClick={() => navigate(isEditMode ? '/evaluations' : requestedPlanId ? '/plans' : '/courses')} className="flex items-center gap-1.5 text-sm hover:opacity-70 transition-opacity" style={{ color: "oklch(0.35 0.13 245)" }}>
             <ChevronLeft className="w-4 h-4" />返回
           </button>
           

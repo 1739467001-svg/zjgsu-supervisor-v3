@@ -45,6 +45,7 @@ import {
   markNotificationRead,
   updateEvaluation,
   getListeningPlanById,
+  updateListeningPlan,
   getNotificationById,
   updateListeningPlanStatus,
   updateUserCollege,
@@ -354,6 +355,23 @@ export const appRouter = router({
         ensureCourseInScope(ctx.user!, await ensureCourseExists(plan.courseId));
         await requireCurrentSemester(plan.semesterId);
         await updateListeningPlanStatus(input.planId, input.status);
+        return { success: true };
+      }),
+
+    update: supervisorProcedure
+      .input(z.object({ planId: z.number().int().positive(), planWeek: z.number().int().positive().nullable(), note: z.string().trim().max(1000) }))
+      .mutation(async ({ input, ctx }) => {
+        const plan = await getListeningPlanById(input.planId);
+        if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "计划不存在" });
+        if (plan.supervisorId !== ctx.user!.id) throw new TRPCError({ code: "FORBIDDEN", message: "只能修改本人的听课计划" });
+        const course = await ensureCourseExists(plan.courseId);
+        ensureCourseInScope(ctx.user!, course);
+        await requireCurrentSemester(plan.semesterId);
+        const semester = await getActiveSemester();
+        if (plan.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "只有待听课计划可以修改" });
+        if ((Array.isArray(course.weekNumbers) && !course.weekNumbers.length) || (input.planWeek != null && (input.planWeek > semester!.totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek))))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
+        try { await updateListeningPlan(input.planId, { planWeek: input.planWeek, note: input.note }); }
+        catch (error) { const message = error instanceof Error ? error.message : ""; throw new TRPCError({ code: "BAD_REQUEST", message: /只有尚未关联|该周已有|历史档案只读/.test(message) ? message : "计划未修改，请刷新后重试" }); }
         return { success: true };
       }),
 

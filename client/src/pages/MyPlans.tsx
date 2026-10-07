@@ -20,6 +20,10 @@ import { useLocation } from "wouter";
 import PlanCalendarView from "@/components/PlanCalendarView";
 import { formatDateBJ } from "@shared/dateUtils";
 import { useSemesterSelection } from "@/contexts/SemesterSelection";
+import { useSemester } from "@/hooks/useSemester";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 const STATUS_MAP = {
   pending: {
@@ -45,6 +49,12 @@ export default function MyPlans() {
   const [activeTab, setActiveTab] = useState<"pending" | "completed" | "cancelled" | "all">("pending");
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const utils = trpc.useUtils();
+  const { semester } = useSemester();
+  const [editing, setEditing] = useState<{ id: number; week: string; note: string; weeks?: number[] | null } | null>(null);
+  const editMutation = trpc.plans.update.useMutation({
+    onSuccess: () => { toast.success("计划已修改"); setEditing(null); utils.plans.myPlans.invalidate(); utils.plans.getUsedWeeks.invalidate(); },
+    onError: error => toast.error(error.message),
+  });
 
   const { data: plans, isLoading } = trpc.plans.myPlans.useQuery({ semesterId });
 
@@ -340,9 +350,11 @@ export default function MyPlans() {
 
                         {/* 操作按钮 */}
                         <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0 flex-wrap justify-end">
+                          {plan.status === "pending" && !plan.evaluationId && !isHistorical && <Button size="sm" variant="outline" onClick={() => setEditing({ id: plan.id, week: plan.planWeek?.toString() || "none", note: plan.note || "", weeks: course?.weekNumbers })}>修改计划</Button>}
                           {plan.status === "pending" && !isHistorical && (
                             <Button
                               size="sm"
+                              aria-label={plan.evaluationId && plan.evaluationStatus === "draft" ? "继续评价" : "填写评价"}
                               className="h-8 px-2 sm:px-3 text-xs gap-1"
                               onClick={() => {
                                 // 若该课程已有草稿评价，直接跳转到续编模式；否则新建
@@ -362,6 +374,7 @@ export default function MyPlans() {
                           {plan.status === "completed" && (
                             <Button
                               size="sm"
+                              aria-label="查看评价"
                               variant="outline"
                               className="h-8 px-2 sm:px-3 text-xs gap-1"
                               onClick={() => plan.evaluationId ? navigate(`/evaluations/${plan.evaluationId}`) : navigate("/evaluations")}
@@ -391,6 +404,7 @@ export default function MyPlans() {
                         添加时间：
                         {formatDateBJ(plan.createdAt)}
                       </p>
+                      {plan.note && <p className="text-sm mt-2 whitespace-pre-wrap break-words">备注：{plan.note}</p>}
                     </div>
                   );
                 })}
@@ -399,6 +413,17 @@ export default function MyPlans() {
           </>
         )}
       </div>
+      <Dialog open={!!editing} onOpenChange={open => { if (!open) setEditing(null); }}>
+        <DialogContent><DialogHeader><DialogTitle>修改听课计划</DialogTitle><DialogDescription>仅修改本人的待听课安排；已关联评价的计划受保护。</DialogDescription></DialogHeader>
+          <Label htmlFor="edit-plan-week">计划周次</Label>
+          <select id="edit-plan-week" className="border rounded-md p-2" value={editing?.week || "none"} onChange={event => setEditing(previous => previous ? { ...previous, week: event.target.value } : null)}>
+            <option value="none">不指定周次</option>
+            {Array.from({ length: semester.totalWeeks }, (_, i) => i + 1).filter(week => !editing?.weeks?.length || editing.weeks.includes(week)).map(week => <option key={week} value={week}>第{week}周</option>)}
+          </select>
+          <Label htmlFor="edit-plan-note">计划备注</Label><Textarea id="edit-plan-note" maxLength={1000} value={editing?.note || ""} onChange={event => setEditing(previous => previous ? { ...previous, note: event.target.value } : null)} />
+          <Button disabled={!editing || editMutation.isPending || isHistorical} onClick={() => editing && editMutation.mutate({ planId: editing.id, planWeek: editing.week === "none" ? null : Number(editing.week), note: editing.note })}>保存修改</Button>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

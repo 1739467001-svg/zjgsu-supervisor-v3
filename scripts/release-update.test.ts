@@ -31,12 +31,14 @@ describe('固定版本代码发布与回退',()=>{
     await activateRelease({root,target,restart,health});expect(await fs.realpath(path.join(root,'previous'))).toBe(old);expect(await fs.readFile(path.join(old,'dist/index.js'),'utf8')).toBe('a'.repeat(40));
     await expect(activateRelease({root,target,restart,health})).rejects.toThrow(/已经是目标版本/);
   });
-  it('依赖安装失败时旧链接及构建不改变，准备步骤没有服务重启',async()=>{
+  it.each(['install','build'])('%s失败时旧链接及构建不改变，准备步骤没有服务重启',async phase=>{
     const {root,old}=await fixture();
     const repo=path.resolve(import.meta.dirname,'..'),revision='82a3c929118fdd7c3c4bc91f111f822361a13775';
-    const run=vi.fn(async(executable:string,args:string[])=>{if(executable==='git')return args[0]==='status'?'':revision;throw new Error('installation failure');});
+    const run=vi.fn(async(executable:string,args:string[])=>{if(executable==='git')return args[0]==='status'?'':revision;if(args[0]===phase)throw new Error('injected preparation failure');return '';});
     await expect(prepareRelease({repo,root,revision,run})).rejects.toThrow(/未重启/);
     expect(await fs.realpath(path.join(root,'current'))).toBe(old);expect(run.mock.calls.every(call=>call[0]!=='systemctl')).toBe(true);
+    expect(run.mock.calls.some(call=>call[0]==='pnpm'&&call[1][0]===phase)).toBe(true);
+    expect(await fs.readFile(path.join(old,'dist/index.js'),'utf8')).toBe('a'.repeat(40));
   });
   it('已有发布锁时拒绝第二个更新',async()=>{
     const {root,target}=await fixture(),restart=vi.fn();await fs.mkdir(path.join(root,'.release-lock'));

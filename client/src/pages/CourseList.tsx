@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { Search, BookOpen, MapPin, Clock, User, Plus, ChevronLeft, ChevronRight, Filter, X, RefreshCw } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { hasAnyRole } from "@shared/roles";
+import { hasAnyRole, isCollegeScopedSupervisor } from "@shared/roles";
 import { useSemester } from "@/hooks/useSemester";
 import { useSemesterSelection } from "@/contexts/SemesterSelection";
 
@@ -33,6 +33,7 @@ export default function CourseList() {
   const { semesterId, semester, isHistorical } = useSemesterSelection();
   const WEEKS = Array.from({ length: semester.totalWeeks }, (_, i) => i + 1);
   const canAddPlan = !isHistorical && hasAnyRole(user, ["supervisor_expert", "supervisor_leader", "graduate_admin", "admin"]);
+  const collegeOnly = !hasAnyRole(user, ["graduate_admin", "admin"]) && (hasAnyRole(user, ["college_secretary"]) || isCollegeScopedSupervisor(user));
 
   const [filters, setFilters] = useState({ ...DEFAULT_FILTERS });
   const [planDialog, setPlanDialog] = useState<{ open: boolean; courseId?: number; courseName?: string }>({ open: false });
@@ -117,7 +118,7 @@ export default function CourseList() {
           <div>
             <h1 className="text-xl font-bold" style={{ color: "oklch(0.18 0.025 240)" }}>课程浏览</h1>
             <p className="text-sm mt-0.5" style={{ color: "oklch(0.52 0.025 240)" }}>
-              全校研究生课程 · 共 <span className="font-semibold" style={{ color: "oklch(0.35 0.13 245)" }}>{coursesData?.total || 0}</span> 条
+              {collegeOnly ? "本院研究生课程" : "全校研究生课程"} · 共 <span className="font-semibold" style={{ color: "oklch(0.35 0.13 245)" }}>{coursesData?.total || 0}</span> 条
               {activeFilterCount > 0 && <span className="ml-1">（已筛选）</span>}
             </p>
           </div>
