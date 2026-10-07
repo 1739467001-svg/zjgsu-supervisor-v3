@@ -21,7 +21,7 @@ import {
 } from "./courseImport";
 import { normalizeCourseCollege } from "../shared/colleges";
 
-const SEMESTER_START = "2026-09-07";
+const SEMESTER_START = "2026-09-14";
 const TOTAL_WEEKS = 18;
 
 /** 构造一个内存工作簿，用于不依赖真实文件的用例 */
@@ -69,19 +69,19 @@ describe("周次解析", () => {
 
 describe("日期换算周次", () => {
   it("学期第一周的周一算第 1 周", () => {
-    expect(weekOfDate("2026-09-07", SEMESTER_START)).toBe(1);
+    expect(weekOfDate("2026-09-14", SEMESTER_START)).toBe(1);
   });
 
   it("第一周的周日仍算第 1 周", () => {
-    expect(weekOfDate("2026-09-13", SEMESTER_START)).toBe(1);
+    expect(weekOfDate("2026-09-20", SEMESTER_START)).toBe(1);
   });
 
   it("跨到下周一就进第 2 周", () => {
-    expect(weekOfDate("2026-09-14", SEMESTER_START)).toBe(2);
+    expect(weekOfDate("2026-09-21", SEMESTER_START)).toBe(2);
   });
 
   it("学期末尾的日期落在第 18 周", () => {
-    expect(weekOfDate("2027-01-10", SEMESTER_START)).toBe(18);
+    expect(weekOfDate("2027-01-17", SEMESTER_START)).toBe(18);
   });
 });
 
@@ -155,8 +155,8 @@ describe("标准排课表：按表头名取列，不按列序号", () => {
 
 describe("MBA 课表：把上课场次归并成课程", () => {
   const rows = [MBA_HEADER,
-    ["2026-2027（一）学期", "2025MBA数领班", "数据模型与决策", "必修", "", "马龙", "315", "2026-09-12", "星期六", "09:00", "12:00", "18"],
-    ["2026-2027（一）学期", "2025MBA数领班", "数据模型与决策", "必修", "", "马龙", "315", "2026-10-17", "星期六", "09:00", "12:00", "18"],
+    ["2026-2027（一）学期", "2025MBA数领班", "数据模型与决策", "必修", "", "马龙", "315", "2026-09-19", "星期六", "09:00", "12:00", "18"],
+    ["2026-2027（一）学期", "2025MBA数领班", "数据模型与决策", "必修", "", "马龙", "315", "2026-10-24", "星期六", "09:00", "12:00", "18"],
     ["2026-2027（一）学期", "2025MBA数领班", "(考试)数据模型与决策", "必修", "", "", "315", "2026-11-28", "星期六", "09:00", "12:00", "18"],
   ];
 
@@ -264,8 +264,8 @@ describe.runIf(REAL_MBA && existsSync(REAL_MBA))("真实课表：MBA 课表", ()
     const allWeeks = res.courses.flatMap((c) => c.weekNumbers);
     expect(Math.min(...allWeeks)).toBeGreaterThanOrEqual(1);
     expect(Math.max(...allWeeks)).toBeLessThanOrEqual(TOTAL_WEEKS);
-    // 起始日正确时不应有越界周次
-    expect(res.warnings.join()).not.toMatch(/超出/);
+    // 原表含9月12/13日；9月14日为第一周，必须明确报告第0周，不能挪到第一周。
+    expect(res.warnings.join()).toMatch(/第 0 周/);
   });
 });
 

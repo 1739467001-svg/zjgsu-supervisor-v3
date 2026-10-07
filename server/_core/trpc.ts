@@ -7,6 +7,9 @@ import { isAccountDisabled, isPasswordResetRequired } from "../passwords";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  errorFormatter({ shape, error }) {
+    return { ...shape, message: error.code === "INTERNAL_SERVER_ERROR" ? "操作未完成，请联系管理员核查" : shape.message, data: { ...shape.data, stack: undefined } };
+  },
 });
 
 export const router = t.router;
@@ -36,11 +39,11 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
-export const adminProcedure = t.procedure.use(
+export const adminProcedure = protectedProcedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
-    if (!ctx.user || ctx.user.role !== 'admin') {
+    if (!ctx.user || !hasAnyRole(ctx.user, ['admin'])) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 

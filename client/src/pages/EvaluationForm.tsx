@@ -139,6 +139,9 @@ export default function EvaluationForm() {
   const actualEvalId = evalId || 0;
   const isEdit = !!actualEvalId && actualEvalId > 0;
   const isValidCourseId = courseId && courseId > 0;
+  const requestedPlanId = Number(new URLSearchParams(window.location.search).get("planId")) || undefined;
+  const { data: ownPlans } = trpc.plans.myPlans.useQuery({ semesterId: activeSemesterId }, { enabled: !isEdit && !!requestedPlanId && !!activeSemesterId });
+  const sourcePlan = ownPlans?.find(plan => plan.id === requestedPlanId && plan.courseId === courseId && plan.status === "pending");
 
   // 计算当天日期和对应周次的默认值
   const getTodayDefaults = () => {
@@ -150,6 +153,7 @@ export default function EvaluationForm() {
   const todayDefaults = getTodayDefaults();
 
   const [form, setForm] = useState({
+    planId: undefined as number | undefined,
     listenDate: todayDefaults.listenDate,
     actualWeek: todayDefaults.actualWeek,
     score_teaching_content: undefined as number | undefined,
@@ -186,6 +190,15 @@ export default function EvaluationForm() {
 
   const { data: course } = trpc.courses.getById.useQuery(courseId || 0, { enabled: !!isValidCourseId });
   const { data: existingEval } = trpc.evaluations.getById.useQuery(evalId || 0, { enabled: isEdit });
+  const appliedPlan = useRef<string>("");
+  useEffect(() => {
+    if (isEdit || !sourcePlan) return;
+    const key = `${sourcePlan.id}:${semester.startDate}`;
+    if (appliedPlan.current === key) return;
+    appliedPlan.current = key;
+    const range = sourcePlan.planWeek ? calculateDateRangeFromWeek(sourcePlan.planWeek, semester) : undefined;
+    setForm(previous => ({ ...previous, planId: sourcePlan.id, ...(range ? { actualWeek: sourcePlan.planWeek!, listenDate: range.startDate } : {}) }));
+  }, [isEdit, sourcePlan, semester.startDate, semester.totalWeeks]);
   const archiveReadOnly = isHistorical || !isWritableSemester(isEdit ? existingEval?.semesterId : course?.semesterId, activeSemesterId);
 
   // 编辑模式下，用已有数据覆盖默认值
@@ -289,6 +302,7 @@ export default function EvaluationForm() {
       // 强制刷新所有相关缓存，确保查看时是最新数据
       utils.evaluations.myEvaluations.invalidate();
       utils.evaluations.allEvaluations.invalidate();
+      utils.plans.myPlans.invalidate();
       if (actualEvalId > 0) {
         utils.evaluations.getById.invalidate(actualEvalId);
       }
@@ -435,6 +449,10 @@ export default function EvaluationForm() {
   };
 
   const handleSubmit = (status: "draft" | "submitted") => {
+    if (!isEdit && requestedPlanId && !sourcePlan) {
+      toast.error("听课计划不可用，请返回计划列表重新选择");
+      return;
+    }
     const resolvedCourseId = getResolvedCourseId();
     if (resolvedCourseId <= 0) {
       toast.error("请先选择有效课程后再保存评价");

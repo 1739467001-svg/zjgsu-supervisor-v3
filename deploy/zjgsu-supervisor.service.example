@@ -1,0 +1,24 @@
+[Unit]
+Description=ZJGSU supervisor V3
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=zjgsu
+Group=zjgsu
+WorkingDirectory=/srv/zjgsu-supervisor/current
+Environment=NODE_ENV=production
+Environment=APP_HOST=127.0.0.1
+Environment=PORT=3000
+Environment=TRUST_PROXY=loopback
+EnvironmentFile=/srv/zjgsu-supervisor/shared/runtime.env
+EnvironmentFile=/srv/zjgsu-supervisor/current/release.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

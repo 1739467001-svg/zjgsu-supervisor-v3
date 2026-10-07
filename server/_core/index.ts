@@ -15,6 +15,8 @@ import { generatePrintableHtml } from "../exportUtils";
 import { hasAnyRole } from "@shared/roles";
 import { canViewEvaluation } from "@shared/evaluationAccess";
 import { isPasswordResetRequired } from "../passwords";
+import { getDb } from "../db";
+import { sql } from "drizzle-orm";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -38,6 +40,18 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  if (process.env.TRUST_PROXY && process.env.TRUST_PROXY !== "loopback") throw new Error("TRUST_PROXY 仅支持 loopback，请将反向代理部署在本机");
+  app.set("trust proxy", process.env.TRUST_PROXY === "loopback" ? "loopback" : false);
+  if (process.env.NODE_ENV === "production" && (!process.env.DATABASE_URL || (process.env.JWT_SECRET?.length || 0) < 32)) throw new Error("生产数据库或会话密钥配置不完整");
+  app.get("/api/health", async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const db = await getDb();
+      if (!db) throw new Error("unavailable");
+      await db.execute(sql`SELECT 1`);
+      res.json({ status: "ok", revision: /^[a-f0-9]{40}$/.test(process.env.RELEASE_COMMIT || "") ? process.env.RELEASE_COMMIT : "local" });
+    } catch { res.status(503).json({ status: "unavailable" }); }
+  });
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -111,7 +125,8 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  if (!Number.isInteger(preferredPort) || preferredPort < 1 || preferredPort > 65535) throw new Error("服务端口无效");
+  const port = process.env.NODE_ENV === "production" ? preferredPort : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
@@ -122,6 +137,7 @@ async function startServer() {
     // 启动听课提醒定时任务（每天凌晨 0:30 运行）
     if (process.env.DISABLE_SCHEDULER !== "1") startScheduler();
   });
+  server.on("error", () => { console.error("服务启动失败，请核查端口与监听地址（未输出配置）"); process.exit(1); });
 }
 
-startServer().catch(console.error);
+startServer().catch(() => { console.error("服务启动失败，请核查配置（未输出敏感信息）"); process.exit(1); });

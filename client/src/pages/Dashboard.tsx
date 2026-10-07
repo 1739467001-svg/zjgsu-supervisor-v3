@@ -177,7 +177,7 @@ export default function Dashboard() {
         {role === "college_secretary" && (
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             {[
-              { label: "本学院已督导课程", value: collegeStats?.submitted || 0, icon: <CheckCircle className="w-5 h-5" />, color: "oklch(0.42 0.14 160)", bg: "oklch(0.93 0.018 160)" },
+              { label: "本学院已督导课程", value: collegeStats?.evaluatedCourses ?? "—", icon: <CheckCircle className="w-5 h-5" />, color: "oklch(0.42 0.14 160)", bg: "oklch(0.93 0.018 160)" },
               { label: "未读通知", value: unreadCount, icon: <Bell className="w-5 h-5" />, color: "oklch(0.55 0.14 85)", bg: "oklch(0.95 0.02 85)" },
               { label: "所属学院", value: user?.college || "-", icon: <Building2 className="w-5 h-5" />, color: "oklch(0.35 0.13 245)", bg: "oklch(0.93 0.018 240)" },
             ].map((stat) => (

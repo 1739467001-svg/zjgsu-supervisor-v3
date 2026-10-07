@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
-import { courses, courseEvaluations, listeningPlans, semesters } from "../drizzle/schema";
+import { courses, courseEvaluations, listeningPlans, semesters, users } from "../drizzle/schema";
 import { getDb } from "./db";
 import { sdk } from "./_core/sdk";
 import { ENV } from "./_core/env";
@@ -18,6 +18,7 @@ router.post("/api/upload-courses", async (req, res, next) => {
     const user = await sdk.authenticateRequest(req);
     if (!hasAnyRole(user, ["graduate_admin", "admin"]) || isPasswordResetRequired(user.password)) { res.status(403).json({ success: false, message: "请先修改初始密码；课表导入仅限研究生院主管或管理员" }); return; }
     res.locals.actor = user.id;
+    res.locals.credential = user.password;
     next();
   } catch { res.status(401).json({ success: false, message: "请先登录" }); }
 }, (req, res, next) => upload.single("file")(req, res, error => {
@@ -32,6 +33,8 @@ router.post("/api/upload-courses", async (req, res, next) => {
     const db = await getDb();
     if (!db) throw new Error("数据库连接失败");
     const result = await db.transaction(async tx => {
+      const actor = (await tx.select().from(users).where(eq(users.id, res.locals.actor)).for("update"))[0];
+      if (!actor || !hasAnyRole(actor, ["graduate_admin", "admin"]) || isPasswordResetRequired(actor.password) || actor.password !== res.locals.credential) throw new Error("账号授权或密码已变化，请重新登录并预览");
       // 同一学期的导入串行处理；学期启用操作亦锁定 semesters 表。
       const semester = (await tx.select().from(semesters).where(eq(semesters.id, semesterId)).for("update"))[0];
       if (!semester?.isActive) throw new Error("只允许导入当前学期，请刷新后重新预览");
@@ -41,10 +44,10 @@ router.post("/api/upload-courses", async (req, res, next) => {
       if (!incoming.length || incoming.some(course => course.academicYear !== semester.academicYear || course.semester !== semester.name)) throw new Error("课表无有效课程或所属学期与目标不一致");
       const existing = await tx.select().from(courses).where(eq(courses.semesterId, semesterId)).orderBy(courses.id).for("update");
       const ids = existing.map(course => course.id);
-      const evaluations = ids.length ? await tx.select({ id: courseEvaluations.id, courseId: courseEvaluations.courseId }).from(courseEvaluations).where(inArray(courseEvaluations.courseId, ids)).orderBy(courseEvaluations.id).for("update") : [];
-      const plans = ids.length ? await tx.select({ id: listeningPlans.id, courseId: listeningPlans.courseId }).from(listeningPlans).where(inArray(listeningPlans.courseId, ids)).orderBy(listeningPlans.id).for("update") : [];
+      const evaluations = ids.length ? await tx.select().from(courseEvaluations).where(inArray(courseEvaluations.courseId, ids)).orderBy(courseEvaluations.id).for("update") : [];
+      const plans = ids.length ? await tx.select().from(listeningPlans).where(inArray(listeningPlans.courseId, ids)).orderBy(listeningPlans.id).for("update") : [];
       const plan = courseUploadPlan(incoming, existing as ExistingCourse[], new Set([...evaluations, ...plans].map(row => row.courseId)), parsed.format);
-      const binding = { file: createHash("sha256").update(req.file!.buffer).digest("hex"), state: uploadFingerprint({ semester, existing, evaluations, plans }), actor: res.locals.actor as number, semesterId, format: parsed.format };
+      const binding = { file: createHash("sha256").update(req.file!.buffer).digest("hex"), state: uploadFingerprint({ semester, existing, evaluations, plans }), actor: actor.id, actorState: uploadFingerprint({ role: actor.role, extraRoles: actor.extraRoles, college: actor.college, scope: actor.supervisorScope, password: actor.password }), semesterId, format: parsed.format };
       const summary = { sourceRows: parsed.sourceRows, total: incoming.length, inserted: plan.inserts.length, updated: plan.updates.length, unchanged: plan.unchanged, preserved: plan.preserved, conflicts: plan.conflicts, warnings: parsed.warnings };
       if (req.body.action === "preview") return { success: true, applied: false, message: "预览完成，尚未写入课表", summary, previewToken: signUploadPreview(binding, ENV.cookieSecret) };
       verifyUploadPreview(String(req.body.previewToken || ""), binding, ENV.cookieSecret);
@@ -57,7 +60,7 @@ router.post("/api/upload-courses", async (req, res, next) => {
   } catch (error) {
     // 不把数据库连接串或内部 SQL 错误返回到页面。
     const message = error instanceof Error ? error.message : "导入失败";
-    const expected = /课表|课程|预览|文件|学期|上传|请选择|会话密钥/.test(message);
+    const expected = /课表|课程|预览|文件|学期|上传|请选择|会话密钥|账号授权/.test(message);
     res.status(400).json({ success: false, message: expected ? message : "导入失败，事务已回滚；请联系管理员核查" });
   }
 });

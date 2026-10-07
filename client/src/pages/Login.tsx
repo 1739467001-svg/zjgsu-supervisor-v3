@@ -102,23 +102,6 @@ export default function Login() {
             ))}
           </div>
 
-          {/* 数据统计 */}
-          <div className="grid grid-cols-3 gap-4 mt-10">
-            {[
-              { value: "1431", label: "课程总数" },
-              { value: "22", label: "覆盖学院" },
-              { value: "588", label: "授课教师" },
-            ].map(({ value, label }) => (
-              <div key={label} className="text-center">
-                <div className="text-2xl font-bold" style={{ color: "oklch(0.72 0.14 85)" }}>
-                  {value}
-                </div>
-                <div className="text-xs mt-1" style={{ color: "oklch(0.60 0.02 240)" }}>
-                  {label}
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 

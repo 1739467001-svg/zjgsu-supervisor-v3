@@ -38,6 +38,13 @@ function ruleBody(css: string, selector: string): string {
 }
 
 describe("两条导出路径必须同源", () => {
+  it("打印保留学生专业和班级，原字段按HTML转义显示", () => {
+    const html = generatePrintableHtml([sampleEvaluation({ course: { studentMajor: "应用心理<专业>", classId: "2026&班" } })]);
+    expect(html).toContain("学生专业");
+    expect(html).toContain("应用心理&lt;专业&gt;");
+    expect(html).toContain("班级编号");
+    expect(html).toContain("2026&amp;班");
+  });
   it("批量导出 PDF 与单份打印页产出完全一致", () => {
     const evals = [sampleEvaluation(), sampleEvaluation({ id: 2, score_teaching_content: 2 })];
     expect(generateEvaluationPdfHtml(evals)).toBe(generatePrintableHtml(evals));

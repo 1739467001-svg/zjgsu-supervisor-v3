@@ -102,7 +102,11 @@ const accountProfileSchema = z.object({
 });
 async function accountAction(action: () => Promise<unknown>) {
   try { await action(); return { success: true }; }
-  catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: (error as Error).message }); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const safe = error instanceof MissingCollegeScopeError || /^(主角色不能重复作为附加角色|不能移除本人全部管理权限|不能停用本人账号|账号不存在|工号已存在，请修改原账号，不要重复创建|数据库连接失败|账号授权已变化，请重新登录)$/.test(message);
+    throw new TRPCError({ code: "BAD_REQUEST", message: safe ? message : "账号操作未完成，请联系管理员核查" });
+  }
 }
 async function selectedSemesterId(id?: number) {
   const semester = id == null ? await getActiveSemester() : await getSemesterById(id);
@@ -183,6 +187,7 @@ async function validateEvaluation(data: z.infer<typeof evaluationSchema>, course
     if (errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("；") });
   }
   let week = data.actualWeek;
+  if (Array.isArray(course.weekNumbers) && course.weekNumbers.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "课程尚无有效排课周次，请联系管理员核查原课表" });
   if (data.listenDate) {
     const date = data.listenDate;
     const parsedDate = new Date(`${date}T00:00:00Z`);
@@ -322,6 +327,7 @@ export const appRouter = router({
         ensureCourseInScope(ctx.user!, course);
         const activeSemester = await getActiveSemester();
         await requireCurrentSemester(course.semesterId);
+        if (Array.isArray(course.weekNumbers) && course.weekNumbers.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "课程尚无有效排课周次，请联系管理员核查原课表" });
         if (input.planWeek != null && (!Number.isInteger(input.planWeek) || input.planWeek < 1 || input.planWeek > activeSemester!.totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek)))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
         return createListeningPlan({
           supervisorId: ctx.user!.id,
@@ -345,6 +351,7 @@ export const appRouter = router({
         const plan = await getListeningPlanById(input.planId);
         if (!plan) throw new TRPCError({ code: "NOT_FOUND" });
         if (!canMutateListeningPlan(ctx.user, plan)) throw new TRPCError({ code: "FORBIDDEN" });
+        ensureCourseInScope(ctx.user!, await ensureCourseExists(plan.courseId));
         await requireCurrentSemester(plan.semesterId);
         await updateListeningPlanStatus(input.planId, input.status);
         return { success: true };
@@ -354,6 +361,7 @@ export const appRouter = router({
       const plan = await getListeningPlanById(input);
       if (!plan) throw new TRPCError({ code: "NOT_FOUND" });
       if (!canMutateListeningPlan(ctx.user, plan)) throw new TRPCError({ code: "FORBIDDEN" });
+      ensureCourseInScope(ctx.user!, await ensureCourseExists(plan.courseId));
       await requireCurrentSemester(plan.semesterId);
       await deleteListeningPlan(input);
       return { success: true };
@@ -468,6 +476,7 @@ export const appRouter = router({
       if (existing.supervisorId !== ctx.user!.id && !hasAnyRole(ctx.user, ["graduate_admin", "admin"])) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      ensureCourseInScope(ctx.user!, await ensureCourseExists(existing.courseId));
       await requireCurrentSemester(existing.semesterId);
       await deleteEvaluation(input);
       return { success: true };
@@ -647,6 +656,7 @@ export const appRouter = router({
         return {
           total: evals.length,
           submitted: evals.filter((e) => e.status === "submitted").length,
+          evaluatedCourses: new Set(evals.filter(e => e.status === "submitted").map(e => e.courseId)).size,
           evaluations: evals,
         };
       }),

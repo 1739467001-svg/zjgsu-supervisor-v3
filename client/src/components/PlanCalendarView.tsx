@@ -423,7 +423,7 @@ export default function PlanCalendarView({ plans, onStatusUpdate, isUpdating }: 
                     if (selectedPlan.evaluationId && selectedPlan.evaluationStatus === 'draft') {
                       navigate(`/evaluations/${selectedPlan.evaluationId}/edit`);
                     } else {
-                      navigate(`/evaluations/new/${selectedPlan.course?.id || selectedPlan.courseId}`);
+                      navigate(`/evaluations/new/${selectedPlan.course?.id || selectedPlan.courseId}?planId=${selectedPlan.id}`);
                     }
                     setSelectedPlan(null);
                   }}

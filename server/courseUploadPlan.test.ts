@@ -3,7 +3,7 @@ import { courseUploadPlan, signUploadPreview, verifyUploadPreview } from "./cour
 import type { ParsedCourse } from "./courseImport";
 const course: ParsedCourse = { academicYear: "2026-2027", semester: "第一学期", college: "工商管理学院", courseName: "测试课程", courseType: "必修", classroom: "A101", classId: "TEST", teacher: "测试教师", campus: "测试校区", weekday: "星期一", weekType: "", period: "1-2", customWeeks: "第1周", weekNumbers: [1], studentMajor: "测试专业", studentCount: 20 };
 const existing = { ...course, id: 1, semesterId: 2 };
-const binding = { file: "file-hash", state: "state-hash", actor: 1, semesterId: 2, format: "standard" as const };
+const binding = { file: "file-hash", state: "state-hash", actor: 1, actorState: "account-hash", semesterId: 2, format: "standard" as const };
 const secret = "test-only-secret-with-at-least-32-characters";
 afterEach(() => vi.useRealTimers());
 describe("课表预览与历史保护", () => {
@@ -30,7 +30,7 @@ describe("课表预览与历史保护", () => {
   it("正式导入绑定文件、数据库快照、账号、学期和入口", () => {
     const token = signUploadPreview(binding, secret);
     expect(() => verifyUploadPreview(token, binding, secret)).not.toThrow();
-    for (const changed of [{ file: "changed" }, { state: "changed" }, { actor: 2 }, { semesterId: 3 }, { format: "mba" as const }]) {
+    for (const changed of [{ file: "changed" }, { state: "changed" }, { actor: 2 }, { actorState: "changed" }, { semesterId: 3 }, { format: "mba" as const }]) {
       expect(() => verifyUploadPreview(token, { ...binding, ...changed }, secret)).toThrow();
     }
     expect(() => verifyUploadPreview(`${token}tampered`, binding, secret)).toThrow();

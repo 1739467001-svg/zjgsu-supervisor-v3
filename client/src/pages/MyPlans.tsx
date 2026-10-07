@@ -349,7 +349,7 @@ export default function MyPlans() {
                                 if ((plan as any).evaluationId && (plan as any).evaluationStatus === 'draft') {
                                   navigate(`/evaluations/${(plan as any).evaluationId}/edit`);
                                 } else {
-                                  navigate(`/evaluations/new/${course?.id || plan.courseId}`);
+                                  navigate(`/evaluations/new/${course?.id || plan.courseId}?planId=${plan.id}`);
                                 }
                               }}
                             >

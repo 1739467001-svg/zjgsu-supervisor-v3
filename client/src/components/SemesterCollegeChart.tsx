@@ -3,7 +3,7 @@ import type { SemesterCollegeRow } from "@shared/semesterStats";
 
 const CONFIG = {
   coverage: { title: "各学院课程评价覆盖率", note: "已评价课程 / 该学院课程总数", color: "#1d4f80" },
-  count: { title: "各学院督导评价次数", note: "所选学期已提交评价，含全部学院", color: "#397785" },
+  count: { title: "各学院督导评价次数", note: "所选学期统计范围内的已提交评价", color: "#397785" },
   score: { title: "各学院平均评分", note: "仅计有效评分；1—5 分，零起点坐标", color: "#746347" },
 };
 

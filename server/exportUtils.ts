@@ -473,6 +473,7 @@ export function generatePrintableHtml(evaluations: EvaluationExportData[]): stri
     infoHtml += buildInfoRow('所属学院', escapeHtml(c.college) || '—', '课程性质', escapeHtml(c.courseType) || '—');
     infoHtml += buildInfoRow('校区', escapeHtml(c.campus) || '—', '教室', escapeHtml(c.classroom) || '—');
     infoHtml += buildInfoRow('上课时间', weekdayPeriod, '学生人数', String(c.studentCount || '—'));
+    infoHtml += buildInfoRow('学生专业', escapeHtml(c.studentMajor) || '—', '班级编号', escapeHtml(c.classId) || '—');
     infoHtml += buildInfoRow('督导专家', escapeHtml(s.name) || '—', '听课日期', listenDateStr);
     infoHtml += buildInfoRow('实际周次', weekStr, '综合评分', scoreStr);
 

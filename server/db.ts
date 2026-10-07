@@ -19,7 +19,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { publicUser } from "./publicUser";
-import { hashPassword } from "./passwords";
+import { hashPassword, isAccountDisabled, isPasswordResetRequired } from "./passwords";
 import { randomBytes } from "node:crypto";
 import { getScopedCollege, hasAnyRole } from "../shared/roles";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
@@ -41,7 +41,7 @@ export async function getDb() {
       }
       _db = drizzle(_pool);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      console.warn("[Database] Connection configuration failed（未输出配置）");
       _db = null;
       _pool = null;
     }
@@ -57,7 +57,7 @@ export async function closeDb() {
       _db = null;
       console.log("[Database] Connection pool closed");
     } catch (error) {
-      console.warn("[Database] Error closing pool:", error);
+      console.warn("[Database] Error closing pool（未输出配置）");
     }
   }
 }
@@ -188,7 +188,10 @@ export async function saveAccountProfile(id: number, profile: AccountProfile, ac
   const db = await getDb();
   if (!db) throw new Error("数据库连接失败");
   await db.transaction(async tx => {
-    const target = (await tx.select({ id: users.id }).from(users).where(eq(users.id, id)).for("update"))[0];
+    const accounts = await tx.select().from(users).orderBy(users.id).for("update");
+    const actor = accounts.find(account => account.id === actorId);
+    if (!actor || !hasAnyRole(actor, ["graduate_admin", "admin"]) || isAccountDisabled(actor.password) || isPasswordResetRequired(actor.password)) throw new Error("账号授权已变化，请重新登录");
+    const target = accounts.find(account => account.id === id);
     if (!target) throw new Error("账号不存在");
     await tx.update(users).set(profile).where(eq(users.id, id));
   });
@@ -208,8 +211,13 @@ export async function disableUserAccount(id: number, actorId: number) {
   if (id === actorId) throw new Error("不能停用本人账号");
   const db = await getDb();
   if (!db) throw new Error("数据库连接失败");
-  if (!(await getUserById(id))) throw new Error("账号不存在");
-  await db.update(users).set({ password: `disabled$${randomBytes(32).toString("hex")}` }).where(eq(users.id, id));
+  await db.transaction(async tx => {
+    const accounts = await tx.select().from(users).orderBy(users.id).for("update");
+    const actor = accounts.find(account => account.id === actorId);
+    if (!actor || !hasAnyRole(actor, ["graduate_admin", "admin"]) || isAccountDisabled(actor.password) || isPasswordResetRequired(actor.password)) throw new Error("账号授权已变化，请重新登录");
+    if (!accounts.some(account => account.id === id)) throw new Error("账号不存在");
+    await tx.update(users).set({ password: `disabled$${randomBytes(32).toString("hex")}` }).where(eq(users.id, id));
+  });
 }
 
 // ============================================================
@@ -542,9 +550,7 @@ export async function getListeningPlanById(planId: number) {
 }
 
 export async function updateListeningPlanStatus(planId: number, status: "pending" | "completed" | "cancelled") {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(listeningPlans).set({ status }).where(eq(listeningPlans.id, planId));
+  await mutateCurrentRecord("plan", planId, async tx => { await tx.update(listeningPlans).set({ status }).where(eq(listeningPlans.id, planId)); });
 }
 
 /**
@@ -586,9 +592,7 @@ export async function completePendingPlanForEvaluation(
 }
 
 export async function deleteListeningPlan(planId: number) {
-  const db = await getDb();
-  if (!db) return;
-  await db.delete(listeningPlans).where(eq(listeningPlans.id, planId));
+  await mutateCurrentRecord("plan", planId, async tx => { await tx.delete(listeningPlans).where(eq(listeningPlans.id, planId)); });
 }
 
 // ============================================================
@@ -613,15 +617,27 @@ export async function createEvaluation(evaluation: InsertCourseEvaluation) {
 }
 
 export async function updateEvaluation(id: number, data: Partial<InsertCourseEvaluation>) {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(courseEvaluations).set(data).where(eq(courseEvaluations.id, id));
+  await mutateCurrentRecord("evaluation", id, async tx => { await tx.update(courseEvaluations).set(data).where(eq(courseEvaluations.id, id)); });
 }
 
 export async function deleteEvaluation(id: number) {
+  await mutateCurrentRecord("evaluation", id, async tx => { await tx.delete(courseEvaluations).where(eq(courseEvaluations.id, id)); });
+}
+
+/** 与导入/切换学期使用相同锁顺序，避免页面检查后学期归档而写入历史。 */
+async function mutateCurrentRecord(kind: "evaluation" | "plan", id: number, action: (tx: any) => Promise<void>) {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(courseEvaluations).where(eq(courseEvaluations.id, id));
+  if (!db) throw new Error("DB not available");
+  const table = kind === "evaluation" ? courseEvaluations : listeningPlans;
+  const initial = (await db.select({ semesterId: table.semesterId, courseId: table.courseId }).from(table).where(eq(table.id, id)))[0];
+  if (!initial?.semesterId) throw new Error("历史档案只读或记录不存在");
+  await db.transaction(async tx => {
+    const semester = (await tx.select().from(semesters).where(eq(semesters.id, initial.semesterId!)).for("update"))[0];
+    const course = (await tx.select().from(courses).where(eq(courses.id, initial.courseId)).for("update"))[0];
+    const record = (await tx.select({ semesterId: table.semesterId, courseId: table.courseId }).from(table).where(eq(table.id, id)).for("update"))[0];
+    if (!semester?.isActive || !record || record.semesterId !== semester.id || course?.semesterId !== semester.id || record.courseId !== course.id) throw new Error("课程或当前学期已变化，历史档案只读，请刷新后重试");
+    await action(tx);
+  });
 }
 
 export async function getEvaluationById(id: number) {

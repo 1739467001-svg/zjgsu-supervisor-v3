@@ -42,13 +42,33 @@ try {
   const current = (courseRows as any[]).find(row => row.semesterId === semester.id && row.college === "工商管理学院");
   const outside = (courseRows as any[]).find(row => row.semesterId === semester.id && row.college === "MBA学院");
   const historical = (courseRows as any[]).find(row => row.semesterId !== semester.id);
+  for (const index of [1, 2, 6]) {
+    const stats = await call("stats.adminDashboard", { semesterId: semester.id }, cookies.get(index));
+    assert(stats.status === 200 && stats.data.totalCourses === (courseRows as any[]).filter(r => r.semesterId === semester.id).length, `全校管理角色 ${index} 统计与课程数一致`);
+    assert(stats.data.semesterColleges.reduce((n: number, r: any) => n + r.totalCourses, 0) === stats.data.totalCourses, `全校管理角色 ${index} 学院明细合计一致`);
+  }
+  for (const index of [3, 4]) assert((await call("stats.adminDashboard", { semesterId: semester.id }, cookies.get(index))).status === 403, `单身份督导 ${index} 无管理统计权限`);
+  for (const index of [5, 7]) {
+    const stats = await call("stats.adminDashboard", { semesterId: semester.id }, cookies.get(index));
+    assert(stats.status === 200 && stats.data.semesterColleges.every((r: any) => r.college === "工商管理学院"), `学院管理角色 ${index} 统计无外院数据`);
+    assert((await call("stats.allCollegeProgress", { semesterId: semester.id }, cookies.get(index))).status === 403, `学院管理角色 ${index} 不能直调全校进度`);
+    assert((await call("users.list", undefined, cookies.get(index))).status === 403, `学院管理角色 ${index} 无全校账号管理`);
+    const summary = await call("stats.collegeStats", { semesterId: semester.id }, cookies.get(index));
+    assert(summary.status === 200 && summary.data.evaluatedCourses === new Set(summary.data.evaluations.filter((e: any) => e.status === "submitted").map((e: any) => e.courseId)).size, `学院管理角色 ${index} 已督导课程去重`);
+  }
+  for (const index of [1,2,3,4,5,6,7]) {
+    const old = await call("courses.list", { semesterId: historical.semesterId, pageSize: 100 }, cookies.get(index));
+    assert(old.status === 200 && old.data.data.every((r: any) => r.semesterId === historical.semesterId), `角色 ${index} 历史课程隔离`);
+    const evals = await call("evaluations.allEvaluations", { semesterId: historical.semesterId }, cookies.get(index));
+    assert(evals.status === 200 && evals.data.every((r: any) => r.semesterId === historical.semesterId), `角色 ${index} 历史评价隔离`);
+  }
   for (const index of [4, 5, 7]) {
     assert((await call("courses.getById", outside.id, cookies.get(index))).status === 403, `院级角色 ${index} 不可访问其他学院课程`);
     assert((await call("courses.getById", current.id, cookies.get(index))).status === 200, `院级角色 ${index} 可查看本院课程`);
     assert((await call("stats.courseCount", { semesterId: semester.id }, cookies.get(index))).data.total === (courseRows as any[]).filter(row => row.semesterId === semester.id && row.college === "工商管理学院").length, `院级角色 ${index} 首页课程数只统计本院`);
   }
   assert((await call("plans.create", { courseId: current.id, planWeek: 4 }, cookies.get(5), true)).status === 403, "单身份秘书不能创建督导计划");
-  for (const index of [3, 6, 7]) {
+  for (const index of [2, 3, 4, 6, 7]) {
     const used = await call("plans.getUsedWeeks", { courseId: current.id }, cookies.get(index));
     const week = Array.from({ length: semester.totalWeeks }, (_, i) => i + 1).find(value => !used.data.usedWeeks.includes(value));
     assert(week != null, `督导角色 ${index} 有可用测试周次`);
@@ -57,11 +77,16 @@ try {
     assert(plan.status === 200 && plan.data.id, `督导角色 ${index} 创建自己的计划`);
     assert((await call("plans.updateStatus", { planId: plan.data.id, status: "pending" }, cookies.get(index), true)).status === 200, `督导角色 ${index} 修改自己的计划`);
     const payload = { ...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key => [key, 4])), courseId: current.id, planId: plan.data.id, actualWeek: week, overallScore: 4, score_research_teaching: 4, highlights: "虚构验收：教学亮点", suggestions: "虚构验收：提升建议", status: "submitted" };
-    const evaluation = await call("evaluations.create", payload, cookies.get(index), true);
-    assert(evaluation.status === 200 && evaluation.data.id, `督导角色 ${index} 完整评分提交`);
+    const evaluation = await call("evaluations.create", { courseId: current.id, planId: plan.data.id, actualWeek: week, highlights: "虚构草稿", status: "draft" }, cookies.get(index), true);
+    assert(evaluation.status === 200 && evaluation.data.id && evaluation.data.status === "draft", `督导角色 ${index} 保存评分草稿`);
+    assert((await call("evaluations.update", { id: evaluation.data.id, data: { courseId: current.id, status: "submitted" } }, cookies.get(index), true)).status === 400, `督导角色 ${index} 不能提交不完整评分`);
+    assert((await call("evaluations.update", { id: evaluation.data.id, data: payload }, cookies.get(index), true)).status === 200, `督导角色 ${index} 草稿修改并完整提交`);
     assert((await call("evaluations.getById", evaluation.data.id, cookies.get(index))).status === 200, `督导角色 ${index} 可读自己的评价`);
     assert((await fetch(`${base}/api/print/evaluation/${evaluation.data.id}`, { headers: { cookie: cookies.get(index)! } })).status === 200, `督导角色 ${index} 可打印自己的评价`);
     if (index === 6) assert((await call("evaluations.getById", evaluation.data.id, cookies.get(3))).status === 403, "其他校级督导不可读取别人的评价");
+    assert((await call("evaluations.exportSingleToExcel", { evalId: evaluation.data.id }, cookies.get(index), true)).status === 200, `督导角色 ${index} 可导出本人评价`);
+    if (index === 6) assert((await fetch(`${base}/api/print/evaluation/${evaluation.data.id}`, { headers: { cookie: cookies.get(3)! } })).status === 403, "其他校级督导不可打印别人的评价");
   }
+  assert((await call("semesters.list", undefined, cookies.get(1))).data.find((s: any) => s.isActive).id === semester.id, "历史查询没有改变全校当前学期");
   console.log(`本地真实接口验收完成：${passed} 项通过。虚构评价保留在专用预览库，未删除数据。`);
 } finally { await connection.end(); }

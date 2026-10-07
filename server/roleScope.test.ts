@@ -10,6 +10,18 @@ import { REQUIRED_SCORE_FIELDS } from "../shared/evaluationValidation";
 const completeSubmission = { ...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key => [key, 4])), score_research_teaching: 4, overallScore: 4, highlights: "测试亮点", suggestions: "测试建议", actualWeek: 7 };
 
 describe("首页课程计数范围", () => {
+  it("已解析但没有有效周次的课程不能按任意周次制定计划或评分", async () => {
+    vi.mocked(db.getCourseById).mockResolvedValueOnce({ id: 1, semesterId: 1, college: "工商管理学院", weekNumbers: [] } as any);
+    const caller = appRouter.createCaller(ctxFor({ role: "supervisor_expert" }));
+    await expect(caller.plans.create({ courseId: 1, planWeek: 7 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    vi.mocked(db.getCourseById).mockResolvedValueOnce({ id: 1, semesterId: 1, college: "工商管理学院", weekNumbers: [] } as any);
+    await expect(caller.evaluations.create({ courseId: 1, actualWeek: 7, status: "draft" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+  it("同一课程多次评价只计一门已督导课程，草稿不计入", async () => {
+    vi.mocked(db.getAllEvaluations).mockResolvedValueOnce([{ courseId: 1, status: "submitted" }, { courseId: 1, status: "submitted" }, { courseId: 2, status: "draft" }] as any);
+    const caller = appRouter.createCaller(ctxFor({ role: "college_secretary", college: "工商管理学院" }));
+    expect(await caller.stats.collegeStats({ semesterId: 1 })).toMatchObject({ submitted: 2, evaluatedCourses: 1 });
+  });
   it.each(["supervisor_expert", "college_secretary"])("%s 的计数仅限本院", async role => {
     const caller = appRouter.createCaller(ctxFor({ role, college: "工商管理学院", supervisorScope: "college" }));
     await caller.stats.courseCount({ semesterId: 1 });

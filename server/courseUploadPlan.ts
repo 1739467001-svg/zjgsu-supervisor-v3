@@ -28,7 +28,7 @@ export function courseUploadPlan(incoming: ParsedCourse[], existing: ExistingCou
   return { inserts, updates, unchanged, conflicts, preserved: existing.filter(course => !incoming.some(row => courseKey(row) === courseKey(course))).length };
 }
 export const uploadFingerprint = (value: unknown) => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
-export function signUploadPreview(payload: { file: string; state: string; actor: number; semesterId: number; format: CourseFileFormat }, secret: string) {
+export function signUploadPreview(payload: { file: string; state: string; actor: number; actorState: string; semesterId: number; format: CourseFileFormat }, secret: string) {
   if (secret.length < 32) throw new Error("会话密钥配置不完整，无法生成导入预览");
   const text = Buffer.from(JSON.stringify({ ...payload, expires: Date.now() + 10 * 60 * 1000 })).toString("base64url");
   return `${text}.${createHmac("sha256", secret).update(text).digest("base64url")}`;

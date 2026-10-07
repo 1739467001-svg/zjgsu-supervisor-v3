@@ -22,9 +22,9 @@
 import XLSX from "xlsx";
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
+import { pathToFileURL } from "node:url";
 import { isCollegeInScope } from "../shared/roles";
 
-dotenv.config();
 
 // ============================================================
 // 表格角色 → 系统角色映射
@@ -72,7 +72,8 @@ const filePath = argv.find((a) => !a.startsWith("--"));
 const apply = argv.includes("--apply");
 const allowUnmatched = argv.includes("--allow-unmatched-college");
 
-if (!filePath) {
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain && !filePath) {
   console.error("用法：npx tsx scripts/import-users.ts <xlsx路径> [--apply] [--allow-unmatched-college]");
   process.exit(2);
 }
@@ -97,7 +98,7 @@ type Person = {
 // ============================================================
 // 解析表格
 // ============================================================
-function parseWorkbook(path: string) {
+export function parsePersonnelWorkbook(path: string) {
   const wb = XLSX.readFile(path);
   const sheetName = wb.SheetNames.find((n) => n.includes("人员")) ?? wb.SheetNames[0];
   const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { range: 1, defval: "", raw: false });
@@ -205,7 +206,7 @@ async function main() {
     process.exit(2);
   }
 
-  const { people, problems, mergedCount } = parseWorkbook(filePath!);
+  const { people, problems, mergedCount } = parsePersonnelWorkbook(filePath!);
 
   console.log(`模式：${apply ? "实际写入（--apply）" : "试运行（不写库）"}`);
   console.log(`解析出 ${people.length} 位人员${mergedCount > 0 ? `（含 ${mergedCount} 条因同工号合并）` : ""}`);
@@ -320,7 +321,7 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("\n执行失败：", err.message);
+if (isMain) { dotenv.config({ quiet: true }); main().catch(() => {
+  console.error("\n执行失败，请核查输入及数据库配置（未输出敏感信息）。");
   process.exit(2);
-});
+}); }
