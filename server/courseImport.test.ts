@@ -83,6 +83,11 @@ describe("日期换算周次", () => {
   it("学期末尾的日期落在第 18 周", () => {
     expect(weekOfDate("2027-01-17", SEMESTER_START)).toBe(18);
   });
+
+  it("非法日历日期不能自动滚动到下一月，合法闰日可以换算", () => {
+    expect(weekOfDate("2026-02-30", "2026-02-02")).toBe(0);
+    expect(weekOfDate("2028-02-29", "2028-02-28")).toBe(1);
+  });
 });
 
 describe("MBA 表的字段处理", () => {
@@ -119,6 +124,18 @@ describe("格式识别", () => {
 });
 
 describe("标准排课表：按表头名取列，不按列序号", () => {
+  it("核查明细使用原Excel物理行号，不因前置或中间空行偏移", () => {
+    const buf = workbook([[], ["标题"], STANDARD_HEADER, [],
+      ["2026-2027", "第一学期", "经济学院", "待核查课程", "", "", "原班级", "", "", "", "", "", "", "", "10", ""],
+    ]);
+    const result = parseCourseWorkbook(buf);
+    expect(result.sourceRows).toBe(1);
+    expect(result.courses).toHaveLength(1);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "no_weeks", sourceRow: 5, courseName: "待核查课程", classId: "原班级" }),
+      expect.objectContaining({ kind: "missing_teacher", sourceRow: 5 }),
+    ]));
+  });
   it("列的顺序被调换后依然解析正确", () => {
     // 把「开课院系」挪到最后一列，模拟学校换导出模板
     const shuffled = ["课程名称", "主讲教师", "自定义周次", "星期几", "节次", "开课院系"];
@@ -159,6 +176,31 @@ describe("MBA 课表：把上课场次归并成课程", () => {
     ["2026-2027（一）学期", "2025MBA数领班", "数据模型与决策", "必修", "", "马龙", "315", "2026-10-24", "星期六", "09:00", "12:00", "18"],
     ["2026-2027（一）学期", "2025MBA数领班", "(考试)数据模型与决策", "必修", "", "", "315", "2026-11-28", "星期六", "09:00", "12:00", "18"],
   ];
+
+  it("越界场次可逐行追溯，保留原日期和合法周次，不把第0周挪成第一周", () => {
+    const result = parseCourseWorkbook(workbook([MBA_HEADER,
+      ["2026-2027（一）学期", "测试班", "测试课", "", "", "测试教师", "A", "2026-09-12", "星期六", "09:00", "12:00", "20"],
+      [],
+      ["2026-2027（一）学期", "测试班", "测试课", "", "", "测试教师", "A", "2026-09-19", "星期六", "09:00", "12:00", "20"],
+    ]), { semesterStartDate: SEMESTER_START, totalWeeks: TOTAL_WEEKS });
+    expect(result.courses).toHaveLength(1);
+    expect(result.courses[0].weekNumbers).toEqual([1]);
+    expect(result.issues).toEqual([expect.objectContaining({ kind: "outside_weeks", sourceRow: 2, date: "2026-09-12", week: 0 })]);
+  });
+
+  it("缺教师、无有效周次和无效日期均明确记录原行，考试不产生缺教师误报", () => {
+    const result = parseCourseWorkbook(workbook([MBA_HEADER,
+      ["2026-2027（一）学期", "测试班", "测试课", "", "", "", "A", "2026-09-13", "星期日", "09:00", "12:00", "20"],
+      ["2026-2027（一）学期", "测试班", "非法日期课", "", "", "教师", "A", "2026-02-30", "星期日", "09:00", "12:00", "20"],
+      ["2026-2027（一）学期", "测试班", "(考试)测试课", "", "", "", "A", "2026-09-20", "星期日", "09:00", "12:00", "20"],
+    ]), { semesterStartDate: SEMESTER_START, totalWeeks: TOTAL_WEEKS });
+    expect(result.courses).toHaveLength(1);
+    expect(result.courses[0].weekNumbers).toEqual([]);
+    expect(result.issues.map(issue => [issue.kind, issue.sourceRow])).toEqual([
+      ["missing_teacher", 2], ["outside_weeks", 2], ["invalid_date", 3], ["no_weeks", 2],
+    ]);
+    expect(() => parseCourseWorkbook(workbook(rows), { semesterStartDate: "2026-02-30" })).toThrow(/起始日无效/);
+  });
 
   it("同一门课的多次上课合并成一条，周次取并集", () => {
     const res = parseCourseWorkbook(workbook(rows), {
@@ -266,6 +308,10 @@ describe.runIf(REAL_MBA && existsSync(REAL_MBA))("真实课表：MBA 课表", ()
     expect(Math.max(...allWeeks)).toBeLessThanOrEqual(TOTAL_WEEKS);
     // 原表含9月12/13日；9月14日为第一周，必须明确报告第0周，不能挪到第一周。
     expect(res.warnings.join()).toMatch(/第 0 周/);
+    expect(res.issues.filter(issue => issue.kind === "outside_weeks")).toHaveLength(45);
+    expect(res.issues.filter(issue => issue.kind === "missing_teacher")).toHaveLength(4);
+    expect(res.issues.filter(issue => issue.kind === "no_weeks")).toHaveLength(16);
+    expect(res.issues.filter(issue => issue.kind === "outside_weeks").every(issue => issue.week === 0 && ["2026-09-12", "2026-09-13"].includes(issue.date))).toBe(true);
   });
 });
 

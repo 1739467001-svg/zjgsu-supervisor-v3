@@ -14,6 +14,7 @@
 
 import * as XLSX from "xlsx";
 import { MBA_COLLEGE, normalizeCourseCollege } from "../shared/colleges";
+import type { CourseImportIssue } from "../shared/courseImportDiagnostics";
 
 export type ParsedCourse = {
   academicYear: string;
@@ -43,6 +44,9 @@ export type ParseResult = {
   sourceRows: number;
   /** 需要人工留意但不阻断导入的问题 */
   warnings: string[];
+  /** 核查原文件用；不改变已有归并或写入数据。 */
+  issues: CourseImportIssue[];
+  sheetName?: string;
 };
 
 export type ParseOptions = {
@@ -106,8 +110,13 @@ export function formatWeekNumbers(weeks: number[]): string {
 export function weekOfDate(date: string, semesterStartDate: string): number {
   const d = Date.parse(date + "T00:00:00Z");
   const s = Date.parse(semesterStartDate + "T00:00:00Z");
-  if (Number.isNaN(d) || Number.isNaN(s)) return 0;
+  if (!validDate(date) || !validDate(semesterStartDate)) return 0;
   return Math.floor((d - s) / (7 * 86400000)) + 1;
+}
+
+function validDate(date: string): boolean {
+  const time = Date.parse(date + "T00:00:00Z");
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date;
 }
 
 // ============================================================
@@ -139,7 +148,7 @@ function cell(row: any[], idx: number): string {
 // 格式一：研究生排课信息表
 // ============================================================
 
-function parseStandard(rows: any[][], headerRow: number): ParseResult {
+function parseStandard(rows: any[][], headerRow: number, rowNumbers: number[]): ParseResult {
   const header = (rows[headerRow] || []).map((c) => String(c ?? "").trim());
   const col = (name: string) => columnIndex(header, name);
 
@@ -163,22 +172,26 @@ function parseStandard(rows: any[][], headerRow: number): ParseResult {
 
   const warnings: string[] = [];
   const courses: ParsedCourse[] = [];
+  const issues: CourseImportIssue[] = [];
   let skippedBlank = 0;
   let noWeeks = 0;
 
-  for (const row of rows.slice(headerRow + 1)) {
+  for (const [index, row] of rows.slice(headerRow + 1).entries()) {
     const courseName = cell(row, idx.courseName);
     const teacher = cell(row, idx.teacher);
+    const issue = (kind: CourseImportIssue["kind"], reason: string) => issues.push({ kind, reason, sourceRow: rowNumbers[headerRow + 1 + index], courseName, classId: cell(row, idx.classId), teacher, date: "", week: null });
     // 课程名和教师都为空的是表尾空行/合计行，直接跳过
     if (!courseName && !teacher) continue;
     if (!courseName) {
       skippedBlank++;
+      issue("missing_course", "缺少课程名称，未导入本行；请核对原文件");
       continue;
     }
 
     const customWeeks = cell(row, idx.customWeeks);
     const weekNumbers = parseWeekNumbers(customWeeks || cell(row, idx.weekType));
-    if (weekNumbers.length === 0) noWeeks++;
+    if (weekNumbers.length === 0) { noWeeks++; issue("no_weeks", "无法解析排课周次，课程保留但不能安排听课或评分；请核对原周次"); }
+    if (!teacher) issue("missing_teacher", "缺少主讲教师，请研究生院核实；未自动补写教师");
 
     const rawCount = cell(row, idx.studentCount);
     courses.push({
@@ -204,7 +217,7 @@ function parseStandard(rows: any[][], headerRow: number): ParseResult {
   if (skippedBlank > 0) warnings.push(`${skippedBlank} 行缺少课程名称，已跳过`);
   if (noWeeks > 0) warnings.push(`${noWeeks} 门课解析不出周次，督导按周次筛选时看不到它们`);
 
-  return { format: "standard", courses, sourceRows: rows.length - headerRow - 1, warnings };
+  return { format: "standard", courses, sourceRows: rows.length - headerRow - 1, warnings, issues };
 }
 
 // ============================================================
@@ -230,7 +243,7 @@ export function splitMbaClassNames(raw: string): string {
   return parts.length > 1 ? parts.join("、") : text;
 }
 
-function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseResult {
+function parseMba(rows: any[][], headerRow: number, opts: ParseOptions, rowNumbers: number[]): ParseResult {
   const header = (rows[headerRow] || []).map((c) => String(c ?? "").trim());
   const col = (name: string) => columnIndex(header, name);
 
@@ -250,22 +263,24 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
   };
 
   const warnings: string[] = [];
+  const issues: CourseImportIssue[] = [];
   const start = opts.semesterStartDate;
   if (!start) {
     throw new Error(
       "MBA 课表只有具体日期，必须提供学期第一周的周一（--start-date）才能换算周次"
     );
   }
+  if (!validDate(start)) throw new Error("学期第一周起始日无效，请核对日期后重新预览");
 
   // 同一门课的多次上课归并成一条记录：
   // 班级+课程+教师+星期+起止时间+教室 相同的视为同一个开课记录，日期集合即周次集合
-  type Group = { first: any[]; dates: string[] };
+  type Group = { first: any[]; dates: string[]; sourceRow: number };
   const groups = new Map<string, Group>();
   let examSessions = 0;
   let noTeacher = 0;
   let badDate = 0;
 
-  for (const row of rows.slice(headerRow + 1)) {
+  for (const [index, row] of rows.slice(headerRow + 1).entries()) {
     const courseName = cell(row, idx.courseName);
     if (!courseName) continue;
 
@@ -274,13 +289,17 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
       examSessions++;
       continue;
     }
-    if (!cell(row, idx.teacher)) noTeacher++;
-
     const date = cell(row, idx.date);
-    if (!date || Number.isNaN(Date.parse(date + "T00:00:00Z"))) {
+    const sourceRow = rowNumbers[headerRow + 1 + index];
+    const issue = (kind: CourseImportIssue["kind"], reason: string, week: number | null = null) => issues.push({ kind, reason, sourceRow, courseName, classId: cell(row, idx.classId), teacher: cell(row, idx.teacher), date, week });
+    if (!cell(row, idx.teacher)) { noTeacher++; issue("missing_teacher", "缺少授课教师，请研究生院核实；未自动补写教师"); }
+    if (!validDate(date)) {
       badDate++;
+      issue("invalid_date", "日期无法解析，未导入本场次；请核对原日期");
       continue;
     }
+    const week = weekOfDate(date, start);
+    if (week < 1 || (opts.totalWeeks && week > opts.totalWeeks)) issue("outside_weeks", `原日期换算为第${week}周，超出学期范围；原日期保留，未加入可听课周次`, week);
 
     const key = [
       cell(row, idx.classId),
@@ -292,7 +311,7 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
       cell(row, idx.classroom),
     ].join("|");
 
-    if (!groups.has(key)) groups.set(key, { first: row, dates: [] });
+    if (!groups.has(key)) groups.set(key, { first: row, dates: [], sourceRow });
     groups.get(key)!.dates.push(date);
   }
 
@@ -301,7 +320,7 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
   const outOfRange = new Set<number>();
   const courses: ParsedCourse[] = [];
 
-  for (const { first: row, dates } of groups.values()) {
+  for (const { first: row, dates, sourceRow } of groups.values()) {
     const courseName = cell(row, idx.courseName);
     const weeks = [...new Set(dates.map((d) => weekOfDate(d, start)))]
       .filter((w) => {
@@ -312,6 +331,7 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
         return true;
       })
       .sort((a, b) => a - b);
+    if (!weeks.length) issues.push({ kind: "no_weeks", sourceRow, courseName, classId: cell(row, idx.classId), teacher: cell(row, idx.teacher), date: dates.join("、"), week: null, reason: "归并课程没有有效周次，课程保留但不能安排听课或评分；请核对以上原场次日期" });
 
     const term = parseMbaTerm(cell(row, idx.term));
     const startTime = cell(row, idx.startTime);
@@ -353,7 +373,7 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions): ParseRe
     );
   }
 
-  return { format: "mba", courses, sourceRows: rows.length - headerRow - 1, warnings };
+  return { format: "mba", courses, sourceRows: rows.length - headerRow - 1, warnings, issues };
 }
 
 // ============================================================
@@ -375,12 +395,16 @@ export function parseCourseWorkbook(buffer: Buffer | ArrayBuffer, opts: ParseOpt
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error("工作簿里没有任何工作表");
 
-  const rows = XLSX.utils.sheet_to_json<any[]>(workbook.Sheets[sheetName], {
+  const physicalRows = XLSX.utils.sheet_to_json<any[]>(workbook.Sheets[sheetName], {
     header: 1,
     defval: "",
     raw: false,
-    blankrows: false,
+    blankrows: true,
+    range: 0,
   });
+  // 保持原有非空行解析口径，同时保留Excel物理行号（含标题前和数据间空行）。
+  const populated = physicalRows.map((row, index) => ({ row, number: index + 1 })).filter(({ row }) => row.some(value => value !== "" && value != null));
+  const rows = populated.map(item => item.row), rowNumbers = populated.map(item => item.number);
 
   const detected = detectFormat(rows);
   if (!detected) {
@@ -390,9 +414,10 @@ export function parseCourseWorkbook(buffer: Buffer | ArrayBuffer, opts: ParseOpt
     );
   }
 
-  return detected.format === "standard"
-    ? parseStandard(rows, detected.headerRow)
-    : parseMba(rows, detected.headerRow, opts);
+  const result = detected.format === "standard"
+    ? parseStandard(rows, detected.headerRow, rowNumbers)
+    : parseMba(rows, detected.headerRow, opts, rowNumbers);
+  return { ...result, sheetName };
 }
 
 // ============================================================

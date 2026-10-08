@@ -33,7 +33,7 @@ try {
   // 检查过的破坏性集成测试仅在这个新建空库运行。
   const tests = spawn("pnpm", ["exec", "vitest", "run", "server/db.integration.test.ts"], { env: { ...process.env, TEST_DATABASE_URL: url, DATABASE_URL: url, DOTENV_CONFIG_PATH: "/dev/null" }, stdio: ["ignore", "pipe", "pipe"] });
   let testOutput = ""; tests.stdout!.on("data", b => testOutput += b); tests.stderr!.on("data", () => {});
-  assert((await once(tests, "exit"))[0] === 0, "独立空库10项数据库集成测试通过");
+  assert((await once(tests, "exit"))[0] === 0, "独立空库真实数据库集成测试通过");
   for (const table of tables) await root.query(`TRUNCATE TABLE \`${database}\`.\`${table}\``);
   for (const [id, role] of [[1,"admin"],[2,"admin"],[3,"college_secretary"]] as const) await root.query(`INSERT INTO \`${database}\`.users (id,openId,employeeId,name,role,college) VALUES (?, ?, ?, ?, ?, '工商管理学院')`, [id,`upload-${id}`,`upload-${id}`,`虚构导入验收${id}`,role]);
   await root.query(`INSERT INTO \`${database}\`.semesters (id,academicYear,name,startDate,totalWeeks,isActive) VALUES (1,'2026-2027','第一学期','2026-09-14',18,1),(2,'2025-2026','第二学期','2026-03-02',19,0)`);
@@ -55,6 +55,11 @@ try {
   assert(weekOfDate("2026-09-14","2026-09-14")===1&&weekOfDate("2026-09-20","2026-09-14")===1&&weekOfDate("2026-09-21","2026-09-14")===2,"9月14日为第一周及周边界正确");
   const before=await snapshot(), preview=await upload(0,"preview",cookies[1]);
   assert(preview.status===200&&preview.data.applied===false&&await snapshot()===before,"真实非MBA预览不写库");
+  assert(JSON.stringify(preview.data.summary.issues)===JSON.stringify(parsed[0].issues),"非MBA预览返回现有解析器的原行核查明细");
+  const mbaPreview = await upload(1,"preview",cookies[1]);
+  assert(mbaPreview.status===200&&await snapshot()===before,"真实MBA核查明细预览不写库");
+  assert(JSON.stringify(mbaPreview.data.summary.issues)===JSON.stringify(parsed[1].issues)&&mbaPreview.data.summary.sheetName===parsed[1].sheetName,"MBA预览原工作表、日期和物理行号与解析器一致");
+  assert(mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="outside_weeks").length===45&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="missing_teacher").length===4&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="no_weeks").length===16,"45场第0周、4场缺教师、16门无有效周次逐项列明");
   assert((await upload(0,"apply",cookies[2],preview.data.previewToken)).status===400,"换账号旧预览失效");
   assert((await upload(0,"apply",cookies[1],preview.data.previewToken,{},Buffer.concat([fs.readFileSync(files[0]),Buffer.from("changed")]))).status===400,"文件变化旧预览失效");
   assert((await upload(0,"apply",cookies[1],preview.data.previewToken,{semesterId:"2"})).status===400,"历史学期拒绝导入");
@@ -87,7 +92,9 @@ try {
   assert(results.every(r=>r.status===200)&&await snapshot()===protectedBefore,"并发重复确认不新增、不部分写入");
   const stats=await call("stats.adminDashboard",{semesterId:1},cookies[1]);
   assert(stats.status===200&&stats.data.totalCourses===merged.length+1,"HTTP统计与真实课程总数一致");
-  const report={database,passed,parsedCourses:merged.length,colleges:new Set(merged.map(c=>c.college)).size,sources:parsed.map((p,i)=>({file:files[i],sha256:createHash("sha256").update(fs.readFileSync(files[i])).digest("hex"),format:p.format,sourceRows:p.sourceRows,parsed:p.courses.length,warnings:p.warnings})),integrationTests:10,result:"PASS"};
+  const integrationTests = Number(testOutput.match(/Tests\s+(\d+) passed/)?.[1] || 0);
+  assert(integrationTests>0,"记录实际数据库测试通过数，不沿用旧固定数量");
+  const report={database,passed,parsedCourses:merged.length,colleges:new Set(merged.map(c=>c.college)).size,sources:parsed.map((p,i)=>({file:files[i],sha256:createHash("sha256").update(fs.readFileSync(files[i])).digest("hex"),format:p.format,sourceRows:p.sourceRows,parsed:p.courses.length,warnings:p.warnings,issueCounts:Object.fromEntries(["outside_weeks","missing_teacher","no_weeks","invalid_date","missing_course"].map(kind=>[kind,p.issues.filter(issue=>issue.kind===kind).length]))})),integrationTests,result:"PASS"};
   fs.mkdirSync("tmp/acceptance",{recursive:true}); fs.writeFileSync("tmp/acceptance/upload-report.json",JSON.stringify(report,null,2)); console.log(JSON.stringify(report,null,2));
 } catch (e) { console.error(`验收未完成：${e instanceof Error && !('sql' in e) ? e.message : '数据库故障（未输出SQL或凭据）'}`); process.exitCode=1; }
 finally { if(child){child.kill("SIGTERM");await once(child,"exit");} await root.query(`DROP USER IF EXISTS '${account}'@'127.0.0.1'`); await root.end(); }

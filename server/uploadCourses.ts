@@ -48,7 +48,7 @@ router.post("/api/upload-courses", async (req, res, next) => {
       const plans = ids.length ? await tx.select().from(listeningPlans).where(inArray(listeningPlans.courseId, ids)).orderBy(listeningPlans.id).for("update") : [];
       const plan = courseUploadPlan(incoming, existing as ExistingCourse[], new Set([...evaluations, ...plans].map(row => row.courseId)), parsed.format);
       const binding = { file: createHash("sha256").update(req.file!.buffer).digest("hex"), state: uploadFingerprint({ semester, existing, evaluations, plans }), actor: actor.id, actorState: uploadFingerprint({ role: actor.role, extraRoles: actor.extraRoles, college: actor.college, scope: actor.supervisorScope, password: actor.password }), semesterId, format: parsed.format };
-      const summary = { sourceRows: parsed.sourceRows, total: incoming.length, inserted: plan.inserts.length, updated: plan.updates.length, unchanged: plan.unchanged, preserved: plan.preserved, conflicts: plan.conflicts, warnings: parsed.warnings };
+      const summary = { sourceRows: parsed.sourceRows, total: incoming.length, inserted: plan.inserts.length, updated: plan.updates.length, unchanged: plan.unchanged, preserved: plan.preserved, conflicts: plan.conflicts, warnings: parsed.warnings, issues: parsed.issues, sheetName: parsed.sheetName };
       if (req.body.action === "preview") return { success: true, applied: false, message: "预览完成，尚未写入课表", summary, previewToken: signUploadPreview(binding, ENV.cookieSecret) };
       verifyUploadPreview(String(req.body.previewToken || ""), binding, ENV.cookieSecret);
       if (plan.conflicts.length) throw new Error("存在课程关联冲突，未写入任何数据，请按预览清单核实");
