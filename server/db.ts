@@ -317,9 +317,12 @@ export async function setActiveSemester(id: number) {
 
 export async function updateSemester(id: number, data: Partial<InsertSemester>) {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("数据库连接失败");
   const { isActive, ...rest } = data;
-  await db.update(semesters).set(rest).where(eq(semesters.id, id));
+  if (!Object.keys(rest).length) return;
+  // 写入时再次限定当前学期，防止接口检查后并发切换使旧档案被修改。
+  const [result] = await db.update(semesters).set(rest).where(and(eq(semesters.id, id), eq(semesters.isActive, true)));
+  if (!result.affectedRows) throw new Error("历史学期档案只读，或当前学期已变化，请刷新后核实");
 }
 
 // ============================================================

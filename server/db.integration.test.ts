@@ -212,4 +212,26 @@ describe.skipIf(!TEST_URL)("数据库集成测试", () => {
       expect(stats!.collegeStats.map((r: any) => r.college).join()).toMatch(/未知学院/);
     });
   });
+  describe("学期配置写入时的历史保护", () => {
+    beforeEach(async () => {
+      await db.delete(schema.semesters);
+      await db.insert(schema.semesters).values([
+        { id: 701, academicYear: "2025-2026", name: "第二学期", startDate: "2026-03-02", totalWeeks: 19, isActive: false },
+        { id: 702, academicYear: "2026-2027", name: "第一学期", startDate: "2026-09-14", totalWeeks: 18, isActive: true },
+      ]);
+    });
+    it("直接调用数据库函数也不能改变历史配置与更新时间", async () => {
+      const before = await db.select().from(schema.semesters);
+      await expect(dbMod.updateSemester(701, { startDate: "2026-09-14" })).rejects.toThrow("历史学期档案只读");
+      expect(await db.select().from(schema.semesters)).toEqual(before);
+    });
+    it("接口检查后已切换学期，旧目标写入仍会被拒绝", async () => {
+      await dbMod.setActiveSemester(702);
+      await db.insert(schema.semesters).values({ id: 703, academicYear: "2026-2027", name: "第二学期", startDate: "2027-02-22", totalWeeks: 19, isActive: false });
+      await dbMod.setActiveSemester(703);
+      const before = await db.select().from(schema.semesters);
+      await expect(dbMod.updateSemester(702, { totalWeeks: 19 })).rejects.toThrow("历史学期档案只读");
+      expect(await db.select().from(schema.semesters)).toEqual(before);
+    });
+  });
 });
