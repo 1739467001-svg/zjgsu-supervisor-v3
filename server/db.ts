@@ -23,6 +23,8 @@ import { hashPassword, isAccountDisabled, isPasswordResetRequired } from "./pass
 import { randomBytes } from "node:crypto";
 import { getScopedCollege, hasAnyRole, isCollegeInScope } from "../shared/roles";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
+import { MBA_COLLEGE, normalizeCourseCollege } from "../shared/colleges";
+import { validateMbaCalendar } from "../shared/courseCalendar";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: any = null;
@@ -278,6 +280,7 @@ export async function getSemesterById(id: number) {
 }
 
 export async function createSemester(data: InsertSemester) {
+  validateMbaCalendar(data);
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
@@ -320,9 +323,17 @@ export async function updateSemester(id: number, data: Partial<InsertSemester>) 
   if (!db) throw new Error("数据库连接失败");
   const { isActive, ...rest } = data;
   if (!Object.keys(rest).length) return;
-  // 写入时再次限定当前学期，防止接口检查后并发切换使旧档案被修改。
-  const [result] = await db.update(semesters).set(rest).where(and(eq(semesters.id, id), eq(semesters.isActive, true)));
-  if (!result.affectedRows) throw new Error("历史学期档案只读，或当前学期已变化，请刷新后核实");
+  await db.transaction(async tx => {
+    const [current] = await tx.select().from(semesters).where(eq(semesters.id, id)).for("update");
+    if (!current?.isActive) throw new Error("历史学期档案只读，或当前学期已变化，请刷新后核实");
+    validateMbaCalendar({ ...current, ...rest });
+    const changingMba = (rest.mbaStartDate !== undefined && rest.mbaStartDate !== current.mbaStartDate) || (rest.mbaTotalWeeks !== undefined && rest.mbaTotalWeeks !== current.mbaTotalWeeks);
+    if (changingMba) {
+      const existing = await tx.select({ college: courses.college }).from(courses).where(eq(courses.semesterId, id)).for("update");
+      if (existing.some(c => normalizeCourseCollege(c.college ?? "") === MBA_COLLEGE)) throw new Error("已有 MBA 课表，不能直接改变周历；请先完成独立迁移演练，避免计划与评价周次错位");
+    }
+    await tx.update(semesters).set(rest).where(and(eq(semesters.id, id), eq(semesters.isActive, true)));
+  });
 }
 
 // ============================================================

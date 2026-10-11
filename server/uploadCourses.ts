@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { courses, courseEvaluations, listeningPlans, semesters, users } from "../drizzle/schema";
 import { getDb } from "./db";
+import { courseCalendar } from "@shared/courseCalendar";
+import { MBA_COLLEGE } from "@shared/colleges";
 import { sdk } from "./_core/sdk";
 import { ENV } from "./_core/env";
 import { hasAnyRole } from "@shared/roles";
@@ -38,7 +40,9 @@ router.post("/api/upload-courses", async (req, res, next) => {
       // 同一学期的导入串行处理；学期启用操作亦锁定 semesters 表。
       const semester = (await tx.select().from(semesters).where(eq(semesters.id, semesterId)).for("update"))[0];
       if (!semester?.isActive) throw new Error("只允许导入当前学期，请刷新后重新预览");
-      const parsed = parseCourseWorkbook(req.file!.buffer, { semesterStartDate: semester.startDate, totalWeeks: semester.totalWeeks });
+      if (req.body.format === "mba" && (!semester.mbaStartDate || !semester.mbaTotalWeeks)) throw new Error("请先确认并配置 MBA 独立周历，再预览导入");
+      const calendar = courseCalendar(semester, req.body.format === "mba" ? MBA_COLLEGE : undefined);
+      const parsed = parseCourseWorkbook(req.file!.buffer, { semesterStartDate: calendar.startDate, totalWeeks: calendar.totalWeeks });
       if (parsed.format !== req.body.format) throw new Error("文件格式与上传入口不一致");
       const incoming = mergeDuplicateCourses(parsed.courses).merged;
       if (!incoming.length || incoming.some(course => course.academicYear !== semester.academicYear || course.semester !== semester.name)) throw new Error("课表无有效课程或所属学期与目标不一致");

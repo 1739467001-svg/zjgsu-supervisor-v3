@@ -306,12 +306,19 @@ describe.runIf(REAL_MBA && existsSync(REAL_MBA))("真实课表：MBA 课表", ()
     const allWeeks = res.courses.flatMap((c) => c.weekNumbers);
     expect(Math.min(...allWeeks)).toBeGreaterThanOrEqual(1);
     expect(Math.max(...allWeeks)).toBeLessThanOrEqual(TOTAL_WEEKS);
-    // 原表含9月12/13日；9月14日为第一周，必须明确报告第0周，不能挪到第一周。
+    // 本测试保留旧统一周历的诊断，另测学校确认的 MBA 独立周历。
     expect(res.warnings.join()).toMatch(/第 0 周/);
     expect(res.issues.filter(issue => issue.kind === "outside_weeks")).toHaveLength(45);
     expect(res.issues.filter(issue => issue.kind === "missing_teacher")).toHaveLength(4);
     expect(res.issues.filter(issue => issue.kind === "no_weeks")).toHaveLength(16);
     expect(res.issues.filter(issue => issue.kind === "outside_weeks").every(issue => issue.week === 0 && ["2026-09-12", "2026-09-13"].includes(issue.date))).toBe(true);
+  });
+  it("学校确认的MBA独立周历完整保留首周课程，原教师缺失仍报告", () => {
+    const res = parseCourseWorkbook(readFileSync(REAL_MBA!), { semesterStartDate: "2026-09-07", totalWeeks: 18 });
+    expect(res.issues.filter(i => i.kind === "outside_weeks" || i.kind === "no_weeks")).toHaveLength(0);
+    expect(res.issues.filter(i => i.kind === "missing_teacher")).toHaveLength(4);
+    expect(res.courses.every(c => c.weekNumbers.length > 0)).toBe(true);
+    expect(res.courses.some(c => c.weekNumbers.includes(1))).toBe(true);
   });
 });
 

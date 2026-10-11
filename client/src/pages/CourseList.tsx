@@ -13,6 +13,11 @@ import { Label } from "@/components/ui/label";
 import { hasAnyRole, isCollegeScopedSupervisor } from "@shared/roles";
 import { useSemester } from "@/hooks/useSemester";
 import { useSemesterSelection } from "@/contexts/SemesterSelection";
+import { courseCalendar } from "@shared/courseCalendar";
+
+function weekLabel(course: { weekNumbers: number[] | null; weekType: string | null }) {
+  return course.weekNumbers?.length ? `第${course.weekNumbers.join("、")}周` : Array.isArray(course.weekNumbers) ? "周次待核查" : course.weekType || "未提供周次";
+}
 
 const WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
 const CAMPUSES = ["下沙", "教工路"];
@@ -31,12 +36,12 @@ const DEFAULT_FILTERS = {
 export default function CourseList() {
   const { user } = useAuth();
   const { semesterId, semester, isHistorical } = useSemesterSelection();
-  const WEEKS = Array.from({ length: semester.totalWeeks }, (_, i) => i + 1);
+  const WEEKS = Array.from({ length: Math.max(semester.totalWeeks, semester.mbaTotalWeeks || 0) }, (_, i) => i + 1);
   const canAddPlan = !isHistorical && hasAnyRole(user, ["supervisor_expert", "supervisor_leader", "graduate_admin", "admin"]);
   const collegeOnly = !hasAnyRole(user, ["graduate_admin", "admin"]) && (hasAnyRole(user, ["college_secretary"]) || isCollegeScopedSupervisor(user));
 
   const [filters, setFilters] = useState({ ...DEFAULT_FILTERS });
-  const [planDialog, setPlanDialog] = useState<{ open: boolean; courseId?: number; courseName?: string }>({ open: false });
+  const [planDialog, setPlanDialog] = useState<{ open: boolean; courseId?: number; courseName?: string; college?: string | null; weekNumbers?: number[] | null }>({ open: false });
   const [planWeek, setPlanWeek] = useState<number | undefined>();
 
   // 查询当前课程已占用周次
@@ -88,8 +93,8 @@ export default function CourseList() {
     setFilters({ ...DEFAULT_FILTERS });
   };
 
-  const handleAddPlan = (courseId: number, courseName: string) => {
-    setPlanDialog({ open: true, courseId, courseName });
+  const handleAddPlan = (courseId: number, courseName: string, details: { college: string | null; weekNumbers: number[] | null }) => {
+    setPlanDialog({ open: true, courseId, courseName, ...details });
     setPlanWeek(filters.week);
   };
 
@@ -362,7 +367,7 @@ export default function CourseList() {
                         <td className="px-4 py-3 text-sm" style={{ color: "oklch(0.30 0.04 240)" }}>{course.weekday}</td>
                         <td className="px-4 py-3 text-xs" style={{ color: "oklch(0.40 0.025 240)" }}>{course.period}</td>
                         <td className="px-4 py-3 text-xs max-w-[150px]" style={{ color: "oklch(0.52 0.025 240)" }}>
-                          <span title={course.weekType || ""}>{course.weekType}</span>
+                          <span title={weekLabel(course)}>{weekLabel(course)}</span>
                         </td>
                         <td className="px-4 py-3 text-xs" style={{ color: "oklch(0.52 0.025 240)" }}>{course.classroom}</td>
                         {canAddPlan && (
@@ -372,7 +377,8 @@ export default function CourseList() {
                               variant="outline"
                               className="h-7 text-xs gap-1"
                               style={{ borderColor: "oklch(0.55 0.18 245)", color: "oklch(0.35 0.13 245)" }}
-                              onClick={() => handleAddPlan(course.id, course.courseName || "")}
+                              disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.length)}
+                              onClick={() => handleAddPlan(course.id, course.courseName || "", course)}
                             >
                               <Plus className="w-3 h-3" />
                               听课
@@ -400,7 +406,8 @@ export default function CourseList() {
                           variant="outline"
                           className="h-7 text-xs gap-1 flex-shrink-0"
                           style={{ borderColor: "oklch(0.55 0.18 245)", color: "oklch(0.35 0.13 245)" }}
-                          onClick={() => handleAddPlan(course.id, course.courseName || "")}
+                          disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.length)}
+                          onClick={() => handleAddPlan(course.id, course.courseName || "", course)}
                         >
                           <Plus className="w-3 h-3" />听课
                         </Button>
@@ -419,7 +426,7 @@ export default function CourseList() {
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       <Badge variant="outline" className="text-xs h-5 px-1.5">{course.college}</Badge>
-                      <Badge variant="outline" className="text-xs h-5 px-1.5" style={{ color: "oklch(0.52 0.025 240)" }}>{course.weekType}</Badge>
+                      <Badge variant="outline" title={weekLabel(course)} className="text-xs h-5 px-1.5 max-w-[230px] truncate" style={{ color: "oklch(0.52 0.025 240)" }}>{weekLabel(course)}</Badge>
                     </div>
                   </div>
                 ))}
@@ -495,7 +502,7 @@ export default function CourseList() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">不指定周次</SelectItem>
-                  {WEEKS.map((w) => {
+                  {WEEKS.filter(w => w <= courseCalendar(semester, planDialog.college).totalWeeks && (!planDialog.weekNumbers || planDialog.weekNumbers.includes(w))).map((w) => {
                     const isEvaluated = evaluatedWeeks.includes(w);
                     const isUsed = usedWeeks.includes(w);
                     const disabled = isEvaluated || isUsed;

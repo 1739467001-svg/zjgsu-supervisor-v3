@@ -2,7 +2,7 @@ import { createContext, useContext, useState, Fragment } from "react";
 import { trpc } from "@/lib/trpc";
 import { semesterLabel } from "@shared/semesterArchive";
 
-type Semester = { id: number; academicYear: string; name: string; startDate: string; totalWeeks: number; isActive: boolean };
+type Semester = { id: number; academicYear: string; name: string; startDate: string; totalWeeks: number; mbaStartDate?: string | null; mbaTotalWeeks?: number | null; isActive: boolean };
 type Selection = { semester: Semester; semesterId: number; semesters: Semester[]; isHistorical: boolean; label: string; select: (id: number) => void };
 const Context = createContext<Selection | null>(null);
 

@@ -49,6 +49,8 @@ async function startServer() {
       const db = await getDb();
       if (!db) throw new Error("unavailable");
       await db.execute(sql`SELECT 1`);
+      // 增量结构未准备时不得把“能连接数据库”误判为可发布。
+      await db.execute(sql`SELECT mbaStartDate, mbaTotalWeeks FROM semesters LIMIT 0`);
       res.json({ status: "ok", revision: /^[a-f0-9]{40}$/.test(process.env.RELEASE_COMMIT || "") ? process.env.RELEASE_COMMIT : "local" });
     } catch { res.status(503).json({ status: "unavailable" }); }
   });

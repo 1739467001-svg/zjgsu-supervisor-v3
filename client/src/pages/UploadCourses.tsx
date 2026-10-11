@@ -6,16 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { courseIssuesCsv, type CourseImportIssue } from "@shared/courseImportDiagnostics";
+import SemesterSettings from "@/components/SemesterSettings";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 type Preview = { success: boolean; applied?: boolean; message: string; previewToken?: string; summary?: { sourceRows: number; total: number; inserted: number; updated: number; unchanged: number; preserved: number; conflicts: string[]; warnings: string[]; issues?: CourseImportIssue[]; sheetName?: string } };
 
 function CourseUpload({ format, semesterId, label }: { format: "standard" | "mba"; semesterId: number; label: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const utils = trpc.useUtils();
   async function submit(action: "preview" | "apply") {
     if (!file) return;
-    if (action === "apply" && !window.confirm(`确认导入 ${label} 的${format === "mba" ? "MBA" : "非 MBA"}课表？历史记录保留。`)) return;
     setBusy(true);
     try {
       const body = new FormData();
@@ -39,9 +41,9 @@ function CourseUpload({ format, semesterId, label }: { format: "standard" | "mba
   }
   return <section className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
     <h2 className="text-lg font-semibold">{format === "mba" ? "MBA 课表" : "研究生排课信息表（不含 MBA）"}</h2>
-    <p className="text-sm text-slate-600">{format === "mba" ? "按课表日期和目标学期第一周换算周次。" : "按排课表的学院、教师及周次导入。"} 先预览确认，再正式导入。</p>
+    <p className="text-sm text-slate-600">{format === "mba" ? "按原课表日期和 MBA 独立周历换算周次。" : "按排课表的学院、教师及周次导入。"} 先预览确认，再正式导入。</p>
     <Label htmlFor={`upload-${format}`}>选择 .xls 或 .xlsx 文件，最大 20MB</Label>
-    <Input id={`upload-${format}`} type="file" accept=".xls,.xlsx" disabled={busy} onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null); }} />
+    <Input id={`upload-${format}`} type="file" accept=".xls,.xlsx" disabled={busy} onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null); setConfirmOpen(false); }} />
     <Button disabled={!file || busy} onClick={() => submit("preview")}>{busy ? "处理中…" : "预览导入结果"}</Button>
     {preview && <div role={preview.success ? "status" : "alert"} className={`rounded-lg border p-4 space-y-3 ${preview.success ? "border-blue-200 bg-blue-50" : "border-red-200 bg-red-50"}`}>
       <p className="text-sm">{preview.message}</p>
@@ -67,8 +69,9 @@ function CourseUpload({ format, semesterId, label }: { format: "standard" | "mba
         </div>}
         {summary.conflicts.length > 0 && <div><p className="font-medium text-red-800">存在 {summary.conflicts.length} 个冲突，不能正式导入</p><ul className="text-sm list-disc pl-5">{summary.conflicts.map((conflict, index) => <li key={index}>{conflict}</li>)}</ul></div>}
       </>}
-      {preview.success && !preview.applied && preview.previewToken && <Button disabled={busy || !!summary?.conflicts.length} onClick={() => submit("apply")}>确认正式导入</Button>}
+      {preview.success && !preview.applied && preview.previewToken && <Button disabled={busy || !!summary?.conflicts.length} onClick={() => setConfirmOpen(true)}>确认正式导入</Button>}
     </div>}
+    <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}><DialogContent><DialogHeader><DialogTitle>确认导入课表</DialogTitle><DialogDescription>目标：{label} · {format === "mba" ? "MBA" : "非 MBA"}。请核对预览及待核查项；历史记录和文件未包含的课程保留。</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setConfirmOpen(false)}>取消</Button><Button disabled={busy || !preview?.previewToken || !!summary?.conflicts.length} onClick={() => { setConfirmOpen(false); void submit("apply"); }}>确认导入这份课表</Button></DialogFooter></DialogContent></Dialog>
   </section>;
 }
 export default function UploadCourses() {
@@ -77,7 +80,8 @@ export default function UploadCourses() {
     <h1 className="text-2xl font-semibold">上传课程数据</h1>
     <p className="text-sm text-slate-600">目标学期：{label}。两类课表统一展示，历史课表与评价保留。</p>
     {isHistorical ? <p role="status">历史学期只读，请选择当前学期。</p> : semesterId ? <>
-      <p className="rounded-lg border border-slate-200 p-4 text-sm">第一周起始日：{semester?.startDate || "待配置"}。已关联评价或听课计划的课程禁止覆盖；文件或数据库变化后须重新预览。</p>
+      <SemesterSettings />
+      <p className="rounded-lg border border-slate-200 p-4 text-sm">普通课第一周起始日：{semester?.startDate || "待配置"}；MBA 第一周周一：{semester?.mbaStartDate || "待确认配置"}，共 {semester?.mbaTotalWeeks || "待配置"} 周。已关联评价或听课计划的课程禁止覆盖；文件或数据库变化后须重新预览。</p>
       <div className="grid gap-5 lg:grid-cols-2"><CourseUpload key={`standard-${semesterId}`} format="standard" semesterId={semesterId} label={label} /><CourseUpload key={`mba-${semesterId}`} format="mba" semesterId={semesterId} label={label} /></div>
     </> : <p role="alert">请先建立并选择当前学期。</p>}
   </main></DashboardLayout>;

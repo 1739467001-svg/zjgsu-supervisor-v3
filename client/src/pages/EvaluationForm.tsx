@@ -121,7 +121,6 @@ export default function EvaluationForm() {
   const [, navigate] = useLocation();
   const { courseId: courseIdStr } = useParams();
   // 学期起始日与周数来自服务端配置；加载完成前回退到默认值
-  const { semester, weeks: WEEKS } = useSemester();
   
   // 编辑模式：路径包含 /edit 即为编辑模式（同步判断，避免异步问题）
   const isEditMode = window.location.pathname.includes('/edit');
@@ -142,6 +141,9 @@ export default function EvaluationForm() {
   const requestedPlanId = Number(new URLSearchParams(window.location.search).get("planId")) || undefined;
   const { data: ownPlans } = trpc.plans.myPlans.useQuery({ semesterId: activeSemesterId }, { enabled: !isEdit && !!requestedPlanId && !!activeSemesterId });
   const sourcePlan = ownPlans?.find(plan => plan.id === requestedPlanId && plan.courseId === courseId && plan.status === "pending");
+  const { data: course } = trpc.courses.getById.useQuery(courseId || 0, { enabled: !!isValidCourseId });
+  const { data: existingEval } = trpc.evaluations.getById.useQuery(evalId || 0, { enabled: isEdit });
+  const { semester, weeks: WEEKS } = useSemester(course?.college ?? existingEval?.course?.college);
 
   // 计算当天日期和对应周次的默认值
   const getTodayDefaults = () => {
@@ -188,8 +190,6 @@ export default function EvaluationForm() {
     overallScore: undefined as number | undefined,
   });
 
-  const { data: course } = trpc.courses.getById.useQuery(courseId || 0, { enabled: !!isValidCourseId });
-  const { data: existingEval } = trpc.evaluations.getById.useQuery(evalId || 0, { enabled: isEdit });
   const appliedPlan = useRef<string>("");
   useEffect(() => {
     if (isEdit || !sourcePlan) return;

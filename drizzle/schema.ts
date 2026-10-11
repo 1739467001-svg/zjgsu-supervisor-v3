@@ -58,6 +58,9 @@ export const semesters = mysqlTable("semesters", {
   startDate: varchar("startDate", { length: 10 }).notNull(),
   // 学期总周数
   totalWeeks: int("totalWeeks").default(19).notNull(),
+  // MBA 独立周历；历史学期未确认时保持 null，不推断归属。
+  mbaStartDate: varchar("mbaStartDate", { length: 10 }),
+  mbaTotalWeeks: int("mbaTotalWeeks"),
   // 是否为当前学期（全表应仅有一条为 true）
   isActive: boolean("isActive").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

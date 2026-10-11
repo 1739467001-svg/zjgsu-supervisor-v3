@@ -24,7 +24,7 @@ try {
   for(const row of tables){const table=String(Object.values(row)[0]);await root.query(`CREATE TABLE \`${target}\`.\`${table}\` LIKE \`${source}\`.\`${table}\``);await root.query(`INSERT INTO \`${target}\`.\`${table}\` SELECT * FROM \`${source}\`.\`${table}\``);const [rows]=await root.query<any[]>(`SELECT * FROM \`${source}\`.\`${table}\` ORDER BY id`);originalHashes[table]=hash(rows);originalColumns[table]=Object.keys(rows[0]||{});}
   await root.query(`CREATE TABLE \`${target}\`.semesters LIKE zjgsu_preview_20261004.semesters`);
   // 开始日期来自既有系统学期配置/原春季手册，非目标学期前一天；不用于推定学期归属。
-  await root.query(`INSERT INTO \`${target}\`.semesters (id,academicYear,name,startDate,totalWeeks,isActive) VALUES (1,'2025-2026','第二学期','2026-03-02',19,0),(2,'2026-2027','第一学期','2026-09-14',18,1)`);
+  await root.query(`INSERT INTO \`${target}\`.semesters (id,academicYear,name,startDate,totalWeeks,mbaStartDate,mbaTotalWeeks,isActive) VALUES (1,'2025-2026','第二学期','2026-03-02',19,NULL,NULL,0),(2,'2026-2027','第一学期','2026-09-14',18,'2026-09-07',18,1)`);
   for(const table of ["courses","course_evaluations","listening_plans"])await root.query(`ALTER TABLE \`${target}\`.\`${table}\` ADD COLUMN semesterId int NULL`);
   await root.query(`UPDATE \`${target}\`.courses SET semesterId=1 WHERE academicYear='2025-2026' AND semester='第二学期'`);
   for(const table of ["course_evaluations","listening_plans"])await root.query(`UPDATE \`${target}\`.\`${table}\` r JOIN \`${target}\`.courses c ON r.courseId=c.id SET r.semesterId=c.semesterId,r.updatedAt=r.updatedAt`);

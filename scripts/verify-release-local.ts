@@ -41,6 +41,12 @@ try{
   await activateRelease({root:rootPath,target:old.target,restart,health});assert(await health(old),'显式代码回滚后旧服务真实登录与数据库查询通过');
   let failed=false;try{await activateRelease({root:rootPath,target:next.target,restart,health:async(release:any)=>release.target===next.target?false:health(release)});}catch(e){failed=(e as Error).message.includes('旧服务健康检查通过');}
   assert(failed&&await fs.realpath(path.join(rootPath,'current'))===old.target&&await health(old),'新版本健康失败自动恢复旧构建和服务');
+  await root.query(`ALTER TABLE \`${database}\`.semesters DROP COLUMN mbaStartDate`);
+  let incompatible=false;
+  try { await activateRelease({root:rootPath,target:next.target,restart,health}); }
+  catch(e) { incompatible=(e as Error).message.includes('旧服务健康检查通过'); }
+  assert(incompatible&&await fs.realpath(path.join(rootPath,'current'))===old.target&&await health(old),'缺少MBA增量列时真实健康检查失败，自动回滚旧服务');
+  await root.query(`ALTER TABLE \`${database}\`.semesters ADD COLUMN mbaStartDate varchar(10) NULL`);
   const [counts]=await root.query<any[]>(`SELECT (SELECT COUNT(*) FROM \`${database}\`.users) users,(SELECT COUNT(*) FROM \`${database}\`.semesters) semesters`);assert(counts[0].users===1&&counts[0].semesters===1,'发布与回滚未初始化或覆盖数据库');
   assert(!(await fs.stat(path.join(next.target,'node_modules/vite')).catch(()=>null)),'生产依赖安装不含Vite，服务仍能启动');
   await stop();const invalid=spawn(process.execPath,['dist/index.js'],{cwd:next.target,env:{...env,JWT_SECRET:''},stdio:'ignore'});assert((await once(invalid,'exit'))[0]===1,'缺失会话密钥时生产启动失败退出');

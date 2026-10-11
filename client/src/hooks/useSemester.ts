@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { DEFAULT_SEMESTER, type SemesterConfig } from "@shared/dateUtils";
+import { courseCalendar } from "@shared/courseCalendar";
 
 /**
  * 当前学期配置。
@@ -9,7 +10,7 @@ import { DEFAULT_SEMESTER, type SemesterConfig } from "@shared/dateUtils";
  * semesters 表提供。数据未就绪或尚未配置任何学期时回退到常量默认值，
  * 保证界面在任何情况下都能正常渲染。
  */
-export function useSemester() {
+export function useSemester(college?: string | null) {
   const { data, isLoading } = trpc.semesters.active.useQuery(undefined, {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
@@ -17,7 +18,7 @@ export function useSemester() {
 
   return useMemo(() => {
     const semester: SemesterConfig = data
-      ? { startDate: data.startDate, totalWeeks: data.totalWeeks }
+      ? courseCalendar(data, college)
       : DEFAULT_SEMESTER;
 
     return {
@@ -28,5 +29,5 @@ export function useSemester() {
       label: data ? `${data.academicYear} ${data.name}` : undefined,
       isLoading,
     };
-  }, [data, isLoading]);
+  }, [data, isLoading, college]);
 }
