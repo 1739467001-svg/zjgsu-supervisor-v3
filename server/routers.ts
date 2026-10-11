@@ -769,6 +769,7 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         const { id, ...rest } = input;
+        await requireCurrentSemester(id);
         await updateSemester(id, rest);
         return { success: true };
       }),

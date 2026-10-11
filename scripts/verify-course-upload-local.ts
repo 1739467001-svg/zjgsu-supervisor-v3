@@ -54,6 +54,8 @@ try {
   const merged=mergeDuplicateCourses(parsed.flatMap(p=>p.courses)).merged;
   assert(weekOfDate("2026-09-14","2026-09-14")===1&&weekOfDate("2026-09-20","2026-09-14")===1&&weekOfDate("2026-09-21","2026-09-14")===2,"9月14日为第一周及周边界正确");
   const before=await snapshot(), preview=await upload(0,"preview",cookies[1]);
+  const historicalConfig = await call("semesters.update", { id: 2, startDate: "2026-09-14" }, cookies[1], true);
+  assert(historicalConfig.status === 403 && await snapshot() === before, "主管直接修改历史学期配置被拒绝，原档案不变");
   assert(preview.status===200&&preview.data.applied===false&&await snapshot()===before,"真实非MBA预览不写库");
   assert(JSON.stringify(preview.data.summary.issues)===JSON.stringify(parsed[0].issues),"非MBA预览返回现有解析器的原行核查明细");
   const mbaPreview = await upload(1,"preview",cookies[1]);

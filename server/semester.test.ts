@@ -10,7 +10,7 @@ const ACTIVE_SEMESTER = {
   id: 7,
   academicYear: "2026-2027",
   name: "第一学期",
-  startDate: "2026-09-07",
+  startDate: "2026-09-14",
   totalWeeks: 18,
 };
 
@@ -101,9 +101,25 @@ describe("查询按学期隔离", () => {
 });
 
 describe("学期管理接口", () => {
+  it("主管也不能通过直接调用修改历史学期配置", async () => {
+    await expect(appRouter.createCaller(ctx({ role: "graduate_admin" })).semesters.update({ id: 6, startDate: "2026-09-14" })).rejects.toThrow("历史学期档案只读");
+    expect(db.updateSemester).not.toHaveBeenCalled();
+  });
+
+  it("没有当前学期时不允许修改不明归属的档案", async () => {
+    vi.mocked(db.getActiveSemester).mockResolvedValue(undefined as any);
+    await expect(appRouter.createCaller(ctx({ role: "graduate_admin" })).semesters.update({ id: 7, totalWeeks: 19 })).rejects.toThrow("历史学期档案只读");
+    expect(db.updateSemester).not.toHaveBeenCalled();
+  });
+
+  it("当前学期配置修改仍须具备全校管理权限", async () => {
+    await expect(appRouter.createCaller(ctx({ role: "college_secretary", college: "经济学院" })).semesters.update({ id: 7, totalWeeks: 18 })).rejects.toThrow(/研究生院主管/);
+    expect(db.updateSemester).not.toHaveBeenCalled();
+  });
+
   it("当前学期对所有登录用户可读（前端据此算周次）", async () => {
     const res = await appRouter.createCaller(ctx()).semesters.active();
-    expect(res).toMatchObject({ startDate: "2026-09-07", totalWeeks: 18 });
+    expect(res).toMatchObject({ startDate: "2026-09-14", totalWeeks: 18 });
   });
 
   it("未配置学期时返回 null", async () => {

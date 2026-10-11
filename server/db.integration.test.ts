@@ -7,24 +7,19 @@
  *
  * ⚠ 本测试会清空 listening_plans 与 users 两张表，因此：
  *   1. 只有显式设置 TEST_DATABASE_URL 时才运行（刻意不复用 DATABASE_URL，避免误连生产库）
- *   2. 库名必须包含 "test"，否则直接报错拒绝执行
+ *   2. 仅允许本机新建的指定独立测试库及受限临时账号，恢复/历史/预览库即使含test也拒绝
  *
  * 本地运行示例：
- *   TEST_DATABASE_URL='mysql://root@127.0.0.1:3306/zjgsu_test' npx vitest run server/db.integration.test.ts
+ *   使用 scripts/verify-course-upload-local.ts 自动新建空库和受限账号后运行。
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
+import { assertDisposableTestDatabase } from "../scripts/test-database-safety";
 
 const TEST_URL = process.env.TEST_DATABASE_URL;
 
 // 必须在导入 db 模块之前设置，因为 getDb() 读取的是 process.env.DATABASE_URL
 if (TEST_URL) {
-  const dbName = new URL(TEST_URL).pathname.replace(/^\//, "");
-  if (!dbName.includes("test")) {
-    throw new Error(
-      `拒绝执行：集成测试会清空数据表，但目标库名 "${dbName}" 不含 "test"。` +
-        `请指向一个专用测试库。`
-    );
-  }
+  assertDisposableTestDatabase(TEST_URL);
   process.env.DATABASE_URL = TEST_URL;
 }
 
