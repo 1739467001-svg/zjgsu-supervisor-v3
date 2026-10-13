@@ -11,6 +11,8 @@
 
 import { getDb, getActiveSemester } from "./db";
 import { calculateWeekFromDate, type SemesterConfig } from "../shared/dateUtils";
+import { courseCalendar } from "../shared/courseCalendar";
+import { MBA_COLLEGE, normalizeCourseCollege } from "../shared/colleges";
 import { listeningPlans, courses, notifications } from "../drizzle/schema";
 import { eq, and } from "drizzle-orm";
 
@@ -30,12 +32,18 @@ export function getSemesterInfo(date: Date, semester: SemesterConfig): { week: n
   return { week, weekdayCN };
 }
 
+export function getReminderInfo(date: Date, semester: SemesterConfig & { mbaStartDate?: string | null; mbaTotalWeeks?: number | null }, college: string | null, planWeek: number | null) {
+  if (normalizeCourseCollege(college ?? "") === MBA_COLLEGE && (!semester.mbaStartDate || !semester.mbaTotalWeeks)) return null;
+  const info = getSemesterInfo(date, courseCalendar(semester, college));
+  return info && info.week === planWeek ? info : null;
+}
+
 
 // ============================================================
 // 核心提醒逻辑
 // ============================================================
 
-export async function sendListeningReminders(): Promise<void> {
+export async function sendListeningReminders(now: Date = new Date()): Promise<void> {
   const db = await getDb();
   if (!db) {
     console.warn("[Scheduler] Database not available, skipping reminder task");
@@ -43,19 +51,11 @@ export async function sendListeningReminders(): Promise<void> {
   }
 
   // 计算"明天"是学期第几周星期几
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrow = new Date(now);
+  tomorrow.setTime(tomorrow.getTime() + 24 * 60 * 60 * 1000);
   const semester = await getActiveSemester();
   if (!semester) return;
-  const info = getSemesterInfo(tomorrow, semester);
-
-  if (!info) {
-    console.log("[Scheduler] Tomorrow is outside semester range, no reminders to send");
-    return;
-  }
-
-  const { week: tomorrowWeek, weekdayCN: tomorrowWeekday } = info;
-  console.log(`[Scheduler] Checking reminders for: 第${tomorrowWeek}周 ${tomorrowWeekday}`);
+  const tomorrowWeekday = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", weekday: "long" }).format(tomorrow);
 
   try {
     // 查询明天有课的所有待听课计划（JOIN courses表）
@@ -71,6 +71,7 @@ export async function sendListeningReminders(): Promise<void> {
         period: courses.period,
         classroom: courses.classroom,
         campus: courses.campus,
+        college: courses.college,
       })
       .from(listeningPlans)
       .innerJoin(courses, eq(listeningPlans.courseId, courses.id))
@@ -79,22 +80,22 @@ export async function sendListeningReminders(): Promise<void> {
           eq(listeningPlans.status, "pending"),
           eq(listeningPlans.semesterId, semester.id),
           eq(courses.semesterId, semester.id),
-          eq(listeningPlans.planWeek, tomorrowWeek),
           eq(courses.weekday, tomorrowWeekday)
         )
       );
 
-    if (pendingPlans.length === 0) {
+    const matchingPlans = pendingPlans.filter(plan => getReminderInfo(tomorrow, semester, plan.college, plan.planWeek));
+    if (matchingPlans.length === 0) {
       console.log("[Scheduler] No pending plans for tomorrow, no reminders needed");
       return;
     }
 
-    console.log(`[Scheduler] Found ${pendingPlans.length} plans to remind`);
+    console.log(`[Scheduler] Found ${matchingPlans.length} plans to remind`);
 
     // 按督导专家分组，批量创建通知
     type PlanRow = (typeof pendingPlans)[number];
     const plansBySupervisor: Record<number, PlanRow[]> = {};
-    for (const plan of pendingPlans) {
+    for (const plan of matchingPlans) {
       if (!plansBySupervisor[plan.supervisorId]) {
         plansBySupervisor[plan.supervisorId] = [];
       }
@@ -109,12 +110,12 @@ export async function sendListeningReminders(): Promise<void> {
       const courseList = plans
         .map(
           (p) =>
-            `《${p.courseName || "未知课程"}》（${p.teacher || ""}，${p.period || ""}，${p.classroom || ""}）`
+            `《${p.courseName || "未知课程"}》（第${p.planWeek}周，${p.teacher || ""}，${p.period || ""}，${p.classroom || ""}）`
         )
         .join("；");
 
       const title = `听课提醒：明天（${tomorrowWeekday}）有 ${plans.length} 门课程待督导`;
-      const content = `您好！明天（第${tomorrowWeek}周 ${tomorrowWeekday}）您有以下听课计划待执行：\n\n${courseList}\n\n请按时前往听课，完成后记得填写课程评价。`;
+      const content = `您好！明天（${tomorrowWeekday}）您有以下听课计划待执行（各课程按自己的周历）：\n\n${courseList}\n\n请按时前往听课，完成后记得填写课程评价。`;
 
       await db.insert(notifications).values({
         recipientId: supervisorId,
