@@ -2,7 +2,8 @@
 import mysql from 'mysql2/promise';
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
-const origin='https://121.196.217.243', revision='a9a4b385d4a4800033095825779ccec21db327db';
+const origin='https://121.196.217.243', revision=process.argv[2];
+if(!/^[a-f0-9]{40}$/.test(revision||''))throw new Error('需要本次固定发布提交号');
 let passed=0;
 const assert=(ok,label)=>{if(!ok)throw new Error(label);passed++;};
 const conn=await mysql.createConnection({socketPath:'/var/run/mysqld/mysqld.sock',user:'root',database:'zjgsu_v3_20261016'});
@@ -36,7 +37,7 @@ try {
   const [orphans]=await conn.query('SELECT COUNT(*) n FROM course_evaluations e LEFT JOIN courses c ON c.id=e.courseId LEFT JOIN users u ON u.id=e.supervisorId WHERE c.id IS NULL OR u.id IS NULL');
   assert(orphans[0].n===0,'评价课程和作者关联完整');
   const report={revision,passed,terms,result:'PASS',note:'只登录一个主管账号，正常触发密码哈希升级/登录时间；未改密码、未创建评价；完整业务1970项在云端独立克隆验证。'};
-  fs.writeFileSync('/root/zjgsu-release-backup-20261014-1040/public-acceptance-20261016.json',JSON.stringify(report,null,2),{mode:0o600});
+  fs.writeFileSync(`/root/zjgsu-release-backup-20261014-1040/public-acceptance-${revision}.json`,JSON.stringify(report,null,2),{mode:0o600});
   console.log(JSON.stringify({revision,passed,result:'PASS'}));
 }catch(error){console.error('公网验收未通过：'+(error instanceof Error&&!("sql" in error)?error.message:'数据库检查失败，未输出敏感内容'));process.exitCode=1;}
 finally{await conn.end();}
