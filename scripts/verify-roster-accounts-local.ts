@@ -15,7 +15,7 @@ if (!rosterPath || !/^zjgsu_history_test_[a-f0-9]{10}$/.test(source || "")) thro
 const rosterBefore = await fs.readFile(rosterPath);
 const digest = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 const parsed = parsePersonnelWorkbook(rosterPath);
-const root = await mysql.createConnection({ socketPath: "/tmp/mysql.sock", user: "root", dateStrings: true });
+const root = await mysql.createConnection({ socketPath: process.env.VERIFICATION_MYSQL_SOCKET || "/tmp/mysql.sock", user: "root", dateStrings: true });
 const [users] = await root.query<any[]>(`SELECT * FROM \`${source}\`.users ORDER BY id`);
 const sourceHash = digest(JSON.stringify(users));
 const formal = parsed.people.map(person => ({ person, user: users.find(user => user.employeeId === person.employeeId) }));
