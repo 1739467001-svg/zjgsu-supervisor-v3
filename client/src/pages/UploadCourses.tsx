@@ -41,7 +41,7 @@ function CourseUpload({ format, semesterId, label }: { format: "standard" | "mba
   }
   return <section className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
     <h2 className="text-lg font-semibold">{format === "mba" ? "MBA 课表" : "研究生排课信息表（不含 MBA）"}</h2>
-    <p className="text-sm text-slate-600">{format === "mba" ? "按原课表日期和 MBA 独立周历换算周次。" : "按排课表的学院、教师及周次导入。"} 先预览确认，再正式导入。</p>
+    <p className="text-sm text-slate-600">{format === "mba" ? "按原课表日期和全校统一校历换算周次；开学前场次保留并显示第0周。" : "按排课表的学院、教师及周次导入。"} 先预览确认，再正式导入。</p>
     <Label htmlFor={`upload-${format}`}>选择 .xls 或 .xlsx 文件，最大 20MB</Label>
     <Input id={`upload-${format}`} type="file" accept=".xls,.xlsx" disabled={busy} onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null); setConfirmOpen(false); }} />
     <Button disabled={!file || busy} onClick={() => submit("preview")}>{busy ? "处理中…" : "预览导入结果"}</Button>
@@ -81,7 +81,7 @@ export default function UploadCourses() {
     <p className="text-sm text-slate-600">目标学期：{label}。两类课表统一展示，历史课表与评价保留。</p>
     {isHistorical ? <p role="status">历史学期只读，请选择当前学期。</p> : semesterId ? <>
       <SemesterSettings />
-      <p className="rounded-lg border border-slate-200 p-4 text-sm">普通课第一周起始日：{semester?.startDate || "待配置"}；MBA 第一周周一：{semester?.mbaStartDate || "待确认配置"}，共 {semester?.mbaTotalWeeks || "待配置"} 周。已关联评价或听课计划的课程禁止覆盖；文件或数据库变化后须重新预览。</p>
+      <p className="rounded-lg border border-slate-200 p-4 text-sm">全校统一校历（含 MBA）：第1周从 {semester?.startDate || "待配置"} 开始，共 {semester?.totalWeeks || "待配置"} 周。开学前课程显示第0周，保留原日期；正常听课计划与评分从第1周开始。已关联评价或听课计划的课程禁止覆盖；文件或数据库变化后须重新预览。</p>
       <div className="grid gap-5 lg:grid-cols-2"><CourseUpload key={`standard-${semesterId}`} format="standard" semesterId={semesterId} label={label} /><CourseUpload key={`mba-${semesterId}`} format="mba" semesterId={semesterId} label={label} /></div>
     </> : <p role="alert">请先建立并选择当前学期。</p>}
   </main></DashboardLayout>;

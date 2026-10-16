@@ -13,11 +13,8 @@ import { Label } from "@/components/ui/label";
 import { hasAnyRole, isCollegeScopedSupervisor } from "@shared/roles";
 import { useSemester } from "@/hooks/useSemester";
 import { useSemesterSelection } from "@/contexts/SemesterSelection";
-import { courseCalendar } from "@shared/courseCalendar";
+import { courseCalendar, courseWeekLabel as weekLabel } from "@shared/courseCalendar";
 
-function weekLabel(course: { weekNumbers: number[] | null; weekType: string | null }) {
-  return course.weekNumbers?.length ? `第${course.weekNumbers.join("、")}周` : Array.isArray(course.weekNumbers) ? "周次待核查" : course.weekType || "未提供周次";
-}
 
 const WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
 const CAMPUSES = ["下沙", "教工路"];
@@ -36,7 +33,7 @@ const DEFAULT_FILTERS = {
 export default function CourseList() {
   const { user } = useAuth();
   const { semesterId, semester, isHistorical } = useSemesterSelection();
-  const WEEKS = Array.from({ length: Math.max(semester.totalWeeks, semester.mbaTotalWeeks || 0) }, (_, i) => i + 1);
+  const WEEKS = Array.from({ length: semester.totalWeeks }, (_, i) => i + 1);
   const canAddPlan = !isHistorical && hasAnyRole(user, ["supervisor_expert", "supervisor_leader", "graduate_admin", "admin"]);
   const collegeOnly = !hasAnyRole(user, ["graduate_admin", "admin"]) && (hasAnyRole(user, ["college_secretary"]) || isCollegeScopedSupervisor(user));
 
@@ -62,7 +59,7 @@ export default function CourseList() {
     if (filters.college) params.college = filters.college;
     if (filters.campus) params.campus = filters.campus;
     if (filters.weekday) params.weekday = filters.weekday;
-    if (filters.week) params.week = filters.week;
+    if (filters.week !== undefined) params.week = filters.week;
     if (filters.teacher.trim()) params.teacher = filters.teacher.trim();
     if (filters.courseName.trim()) params.courseName = filters.courseName.trim();
     return params;
@@ -95,7 +92,7 @@ export default function CourseList() {
 
   const handleAddPlan = (courseId: number, courseName: string, details: { college: string | null; weekNumbers: number[] | null }) => {
     setPlanDialog({ open: true, courseId, courseName, ...details });
-    setPlanWeek(filters.week);
+    setPlanWeek(filters.week && filters.week > 0 ? filters.week : undefined);
   };
 
   const confirmAddPlan = () => {
@@ -110,7 +107,7 @@ export default function CourseList() {
     filters.college,
     filters.campus,
     filters.weekday,
-    filters.week,
+    filters.week !== undefined,
     filters.teacher.trim(),
     filters.courseName.trim(),
   ].filter(Boolean).length;
@@ -216,17 +213,18 @@ export default function CourseList() {
                 value={filters.week?.toString() || "all"}
                 onValueChange={(v) => handleFilterChange("week", v === "all" ? undefined : parseInt(v))}
               >
-                <SelectTrigger className="h-9 text-xs" style={filters.week ? { borderColor: "oklch(0.55 0.18 245)", background: "oklch(0.96 0.012 240)" } : {}}>
+                <SelectTrigger className="h-9 text-xs" style={filters.week !== undefined ? { borderColor: "oklch(0.55 0.18 245)", background: "oklch(0.96 0.012 240)" } : {}}>
                   <SelectValue placeholder="全部周次" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部周次</SelectItem>
+                  <SelectItem value="0">开学前（第0周）</SelectItem>
                   {WEEKS.map((w) => (
                     <SelectItem key={w} value={w.toString()}>第 {w} 周</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {filters.week && (
+              {filters.week !== undefined && (
                 <button className="absolute right-7 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10" onClick={() => handleClearFilter("week")}>
                   <X className="w-3 h-3" />
                 </button>
@@ -287,9 +285,9 @@ export default function CourseList() {
                   {filters.weekday} <X className="w-2.5 h-2.5" />
                 </Badge>
               )}
-              {filters.week && (
+              {filters.week !== undefined && (
                 <Badge variant="outline" className="text-xs h-6 gap-1 cursor-pointer hover:bg-red-50" style={{ borderColor: "oklch(0.55 0.18 245)", color: "oklch(0.35 0.13 245)" }} onClick={() => handleClearFilter("week")}>
-                  第{filters.week}周 <X className="w-2.5 h-2.5" />
+                  {filters.week === 0 ? "开学前（第0周）" : `第${filters.week}周`} <X className="w-2.5 h-2.5" />
                 </Badge>
               )}
               {filters.teacher.trim() && (
@@ -377,7 +375,7 @@ export default function CourseList() {
                               variant="outline"
                               className="h-7 text-xs gap-1"
                               style={{ borderColor: "oklch(0.55 0.18 245)", color: "oklch(0.35 0.13 245)" }}
-                              disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.length)}
+                              disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.some(w => w > 0))}
                               onClick={() => handleAddPlan(course.id, course.courseName || "", course)}
                             >
                               <Plus className="w-3 h-3" />
@@ -406,7 +404,7 @@ export default function CourseList() {
                           variant="outline"
                           className="h-7 text-xs gap-1 flex-shrink-0"
                           style={{ borderColor: "oklch(0.55 0.18 245)", color: "oklch(0.35 0.13 245)" }}
-                          disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.length)}
+                          disabled={!course.teacher?.trim() || (Array.isArray(course.weekNumbers) && !course.weekNumbers.some(w => w > 0))}
                           onClick={() => handleAddPlan(course.id, course.courseName || "", course)}
                         >
                           <Plus className="w-3 h-3" />听课

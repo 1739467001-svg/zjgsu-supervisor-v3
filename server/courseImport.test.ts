@@ -184,8 +184,9 @@ describe("MBA 课表：把上课场次归并成课程", () => {
       ["2026-2027（一）学期", "测试班", "测试课", "", "", "测试教师", "A", "2026-09-19", "星期六", "09:00", "12:00", "20"],
     ]), { semesterStartDate: SEMESTER_START, totalWeeks: TOTAL_WEEKS });
     expect(result.courses).toHaveLength(1);
-    expect(result.courses[0].weekNumbers).toEqual([1]);
-    expect(result.issues).toEqual([expect.objectContaining({ kind: "outside_weeks", sourceRow: 2, date: "2026-09-12", week: 0 })]);
+    expect(result.courses[0].weekNumbers).toEqual([0,1]);
+    expect(result.courses[0].weekType).toContain("2026-09-12");
+    expect(result.issues).toEqual([expect.objectContaining({ kind: "pre_semester", sourceRow: 2, date: "2026-09-12", week: 0 })]);
   });
 
   it("缺教师、无有效周次和无效日期均明确记录原行，考试不产生缺教师误报", () => {
@@ -195,9 +196,9 @@ describe("MBA 课表：把上课场次归并成课程", () => {
       ["2026-2027（一）学期", "测试班", "(考试)测试课", "", "", "", "A", "2026-09-20", "星期日", "09:00", "12:00", "20"],
     ]), { semesterStartDate: SEMESTER_START, totalWeeks: TOTAL_WEEKS });
     expect(result.courses).toHaveLength(1);
-    expect(result.courses[0].weekNumbers).toEqual([]);
+    expect(result.courses[0].weekNumbers).toEqual([0]);
     expect(result.issues.map(issue => [issue.kind, issue.sourceRow])).toEqual([
-      ["missing_teacher", 2], ["outside_weeks", 2], ["invalid_date", 3], ["no_weeks", 2],
+      ["missing_teacher", 2], ["pre_semester", 2], ["invalid_date", 3],
     ]);
     expect(() => parseCourseWorkbook(workbook(rows), { semesterStartDate: "2026-02-30" })).toThrow(/起始日无效/);
   });
@@ -304,16 +305,15 @@ describe.runIf(REAL_MBA && existsSync(REAL_MBA))("真实课表：MBA 课表", ()
     expect(new Set(res.courses.map((c) => c.college))).toEqual(new Set(["MBA学院"]));
 
     const allWeeks = res.courses.flatMap((c) => c.weekNumbers);
-    expect(Math.min(...allWeeks)).toBeGreaterThanOrEqual(1);
+    expect(Math.min(...allWeeks)).toBe(0);
     expect(Math.max(...allWeeks)).toBeLessThanOrEqual(TOTAL_WEEKS);
-    // 本测试保留旧统一周历的诊断，另测学校确认的 MBA 独立周历。
-    expect(res.warnings.join()).toMatch(/第 0 周/);
-    expect(res.issues.filter(issue => issue.kind === "outside_weeks")).toHaveLength(45);
+    expect(res.issues.filter(issue => issue.kind === "pre_semester")).toHaveLength(45);
+    expect(res.issues.filter(issue => issue.kind === "outside_weeks")).toHaveLength(0);
     expect(res.issues.filter(issue => issue.kind === "missing_teacher")).toHaveLength(4);
-    expect(res.issues.filter(issue => issue.kind === "no_weeks")).toHaveLength(16);
-    expect(res.issues.filter(issue => issue.kind === "outside_weeks").every(issue => issue.week === 0 && ["2026-09-12", "2026-09-13"].includes(issue.date))).toBe(true);
+    expect(res.issues.filter(issue => issue.kind === "no_weeks")).toHaveLength(0);
+    expect(res.issues.filter(issue => issue.kind === "pre_semester").every(issue => issue.week === 0 && ["2026-09-12", "2026-09-13"].includes(issue.date))).toBe(true);
   });
-  it("学校确认的MBA独立周历完整保留首周课程，原教师缺失仍报告", () => {
+  it("底层解析器仍能按明确提供的旧档案起点解析，原教师缺失仍报告", () => {
     const res = parseCourseWorkbook(readFileSync(REAL_MBA!), { semesterStartDate: "2026-09-07", totalWeeks: 18 });
     expect(res.issues.filter(i => i.kind === "outside_weeks" || i.kind === "no_weeks")).toHaveLength(0);
     expect(res.issues.filter(i => i.kind === "missing_teacher")).toHaveLength(4);

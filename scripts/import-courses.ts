@@ -13,13 +13,8 @@ const weeks = Number(options["--weeks"] || 18), date = new Date(`${start}T00:00:
 if (!files.length || !year || !term || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== start || date.getUTCDay() !== 1 || !Number.isInteger(weeks) || weeks < 1 || weeks > 30) throw new Error("请指定文件、--semester 学年/学期、--start-date 第一周周一及有效周数");
 if (year === "2026-2027" && term === "第一学期" && start !== "2026-09-14") throw new Error("浙江工商大学2026年秋季第一周从2026-09-14开始");
 const parsed = files.map(file => {
-  const buffer = readFileSync(file);
-  const detected = parseCourseWorkbook(buffer, { semesterStartDate: start, totalWeeks: weeks });
-  if (detected.format !== "mba") return detected;
-  const mbaStart = options["--mba-start-date"], mbaWeeks = Number(options["--mba-weeks"]);
-  const date = new Date(`${mbaStart}T00:00:00Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== mbaStart || date.getUTCDay() !== 1 || !Number.isInteger(mbaWeeks) || mbaWeeks < 1 || mbaWeeks > 30) throw new Error("MBA 须另行指定已确认的 --mba-start-date 第一周周一与 --mba-weeks");
-  return parseCourseWorkbook(buffer, { semesterStartDate: mbaStart, totalWeeks: mbaWeeks });
+  if ((options["--mba-start-date"] && options["--mba-start-date"] !== start) || (options["--mba-weeks"] && Number(options["--mba-weeks"]) !== weeks)) throw new Error("MBA须使用全校统一校历，不能单独偏移周次");
+  return parseCourseWorkbook(readFileSync(file), { semesterStartDate: start, totalWeeks: weeks });
 });
 const merged = mergeDuplicateCourses(parsed.flatMap(p => p.courses));
 if (merged.merged.some(c => c.academicYear !== year || c.semester !== term)) throw new Error("文件学期与目标不一致");

@@ -418,7 +418,7 @@ export default function MyPlans() {
           <Label htmlFor="edit-plan-week">计划周次</Label>
           <select id="edit-plan-week" className="border rounded-md p-2" value={editing?.week || "none"} onChange={event => setEditing(previous => previous ? { ...previous, week: event.target.value } : null)}>
             <option value="none">不指定周次</option>
-            {Array.from({ length: Math.max(semester.totalWeeks, selectedSemester.mbaTotalWeeks || 0) }, (_, i) => i + 1).filter(week => !editing?.weeks?.length || editing.weeks.includes(week)).map(week => <option key={week} value={week}>第{week}周</option>)}
+            {Array.from({ length: semester.totalWeeks }, (_, i) => i + 1).filter(week => !editing?.weeks?.length || editing.weeks.includes(week)).map(week => <option key={week} value={week}>第{week}周</option>)}
           </select>
           <Label htmlFor="edit-plan-note">计划备注</Label><Textarea id="edit-plan-note" maxLength={1000} value={editing?.note || ""} onChange={event => setEditing(previous => previous ? { ...previous, note: event.target.value } : null)} />
           <Button disabled={!editing || editMutation.isPending || isHistorical} onClick={() => editing && editMutation.mutate({ planId: editing.id, planWeek: editing.week === "none" ? null : Number(editing.week), note: editing.note })}>保存修改</Button>

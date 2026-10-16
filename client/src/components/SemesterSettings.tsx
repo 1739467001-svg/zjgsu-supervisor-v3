@@ -14,19 +14,6 @@ import {
 import { toast } from "sonner";
 import { CalendarRange, Plus, Check } from "lucide-react";
 
-function MbaCalendarSettings({ semester, onSaved }: { semester: { id: number; mbaStartDate: string | null; mbaTotalWeeks: number | null }; onSaved: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [startDate, setStartDate] = useState(semester.mbaStartDate || "");
-  const [weeks, setWeeks] = useState(semester.mbaTotalWeeks || 18);
-  const mutation = trpc.semesters.update.useMutation({ onSuccess: () => { toast.success("MBA 周历已保存，请重新预览课表"); setOpen(false); onSaved(); }, onError: e => toast.error(e.message) });
-  return <><Button size="sm" variant="outline" onClick={() => setOpen(true)}>配置 MBA 周历</Button>
-    <Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>MBA 独立周历</DialogTitle><DialogDescription>请在导入 MBA 课表前配置。已有 MBA 课程后禁止直接改变周历，防止计划和评价错位。</DialogDescription></DialogHeader>
-      <Label htmlFor={`mba-current-start-${semester.id}`}>第一周周一</Label><Input id={`mba-current-start-${semester.id}`} type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
-      <Label htmlFor={`mba-current-weeks-${semester.id}`}>总周数</Label><Input id={`mba-current-weeks-${semester.id}`} type="number" min={1} max={30} value={weeks} onChange={e => setWeeks(Number(e.target.value))} />
-      <DialogFooter><Button disabled={!startDate || mutation.isPending} onClick={() => mutation.mutate({ id: semester.id, mbaStartDate: startDate, mbaTotalWeeks: weeks })}>保存 MBA 周历</Button></DialogFooter>
-    </DialogContent></Dialog></>;
-}
-
 /**
  * 学期配置管理（研究生院主管）。
  *
@@ -37,7 +24,7 @@ export default function SemesterSettings() {
   const utils = trpc.useUtils();
   const { data: semesters, isLoading } = trpc.semesters.list.useQuery();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const emptyForm = { academicYear: "", name: "", startDate: "", totalWeeks: 19, mbaStartDate: "", mbaTotalWeeks: 19 };
+  const emptyForm = { academicYear: "", name: "", startDate: "", totalWeeks: 19 };
   const [form, setForm] = useState(emptyForm);
 
   const invalidate = () => {
@@ -79,7 +66,6 @@ export default function SemesterSettings() {
       name: form.name.trim(),
       startDate: form.startDate,
       totalWeeks: form.totalWeeks,
-      ...(form.mbaStartDate ? { mbaStartDate: form.mbaStartDate, mbaTotalWeeks: form.mbaTotalWeeks } : {}),
     });
   };
 
@@ -135,7 +121,7 @@ export default function SemesterSettings() {
                   )}
                 </div>
                 <p className="text-xs mt-0.5" style={{ color: "oklch(0.55 0.02 240)" }}>
-                  普通课第一周起始 {s.startDate} · 共 {s.totalWeeks} 周；MBA：{s.mbaStartDate ? `${s.mbaStartDate} 起，共 ${s.mbaTotalWeeks} 周` : "独立周历待确认"}
+                  全校统一校历（含 MBA）：第一周起始 {s.startDate} · 共 {s.totalWeeks} 周
                 </p>
               </div>
               {!s.isActive && (
@@ -149,7 +135,6 @@ export default function SemesterSettings() {
                   设为当前
                 </Button>
               )}
-              {s.isActive && <MbaCalendarSettings semester={s} onSaved={invalidate} />}
             </div>
           ))}
         </div>
@@ -203,10 +188,6 @@ export default function SemesterSettings() {
                 onChange={(e) => setForm((p) => ({ ...p, totalWeeks: parseInt(e.target.value) || 0 }))}
               />
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3 pb-4">
-            <div className="space-y-1.5"><Label htmlFor="mba-start-date">MBA 第一周周一（可稍后配置）</Label><Input id="mba-start-date" type="date" value={form.mbaStartDate} onChange={e => setForm(p => ({ ...p, mbaStartDate: e.target.value }))} /></div>
-            <div className="space-y-1.5"><Label htmlFor="mba-total-weeks">MBA 总周数</Label><Input id="mba-total-weeks" type="number" min={1} max={30} value={form.mbaTotalWeeks} onChange={e => setForm(p => ({ ...p, mbaTotalWeeks: Number(e.target.value) }))} /></div>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>

@@ -299,7 +299,8 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions, rowNumbe
       continue;
     }
     const week = weekOfDate(date, start);
-    if (week < 1 || (opts.totalWeeks && week > opts.totalWeeks)) issue("outside_weeks", `原日期换算为第${week}周，超出学期范围；原日期保留，未加入可听课周次`, week);
+    if (week <= 0) issue("pre_semester", "开学前（第0周），保留原日期；正常听课计划与评分从全校第1周开始", 0);
+    else if (opts.totalWeeks && week > opts.totalWeeks) issue("outside_weeks", `原日期换算为第${week}周，超出学期范围；原日期保留，未加入可听课周次`, week);
 
     const key = [
       cell(row, idx.classId),
@@ -322,9 +323,9 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions, rowNumbe
 
   for (const { first: row, dates, sourceRow } of groups.values()) {
     const courseName = cell(row, idx.courseName);
-    const weeks = [...new Set(dates.map((d) => weekOfDate(d, start)))]
+    const weeks = [...new Set(dates.map((d) => Math.max(0, weekOfDate(d, start))))]
       .filter((w) => {
-        if (w < 1 || (totalWeeks > 0 && w > totalWeeks)) {
+        if (totalWeeks > 0 && w > totalWeeks) {
           outOfRange.add(w);
           return false;
         }
@@ -350,7 +351,7 @@ function parseMba(rows: any[][], headerRow: number, opts: ParseOptions, rowNumbe
       // MBA 课表没有校区列，按研究生院确认的口径统一填教工路（可用 mbaCampus 覆盖）
       campus,
       weekday: cell(row, idx.weekday),
-      weekType: "",
+      weekType: dates.some(d => d < start) ? `开学前（第0周）：${[...new Set(dates.filter(d => d < start))].sort().join("、")}` : "",
       // 没有节次，用实际起止时间代替，督导据此找得到课
       period: startTime && endTime ? `${startTime}-${endTime}` : startTime,
       customWeeks: formatWeekNumbers(weeks),

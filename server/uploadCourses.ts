@@ -40,7 +40,6 @@ router.post("/api/upload-courses", async (req, res, next) => {
       // 同一学期的导入串行处理；学期启用操作亦锁定 semesters 表。
       const semester = (await tx.select().from(semesters).where(eq(semesters.id, semesterId)).for("update"))[0];
       if (!semester?.isActive) throw new Error("只允许导入当前学期，请刷新后重新预览");
-      if (req.body.format === "mba" && (!semester.mbaStartDate || !semester.mbaTotalWeeks)) throw new Error("请先确认并配置 MBA 独立周历，再预览导入");
       const calendar = courseCalendar(semester, req.body.format === "mba" ? MBA_COLLEGE : undefined);
       const parsed = parseCourseWorkbook(req.file!.buffer, { semesterStartDate: calendar.startDate, totalWeeks: calendar.totalWeeks });
       if (parsed.format !== req.body.format) throw new Error("文件格式与上传入口不一致");

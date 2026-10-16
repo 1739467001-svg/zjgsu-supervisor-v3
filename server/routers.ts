@@ -9,11 +9,7 @@ import { submissionErrors } from "@shared/evaluationValidation";
 import { normalizeExtraRoles } from "@shared/roles";
 import { calculateWeekFromDate } from "@shared/dateUtils";
 import { courseCalendar } from "@shared/courseCalendar";
-import { MBA_COLLEGE, normalizeCourseCollege } from "@shared/colleges";
 
-function requireMbaCalendar(semester: { mbaStartDate?: string | null; mbaTotalWeeks?: number | null }, course: { college: string | null }) {
-  if (normalizeCourseCollege(course.college ?? "") === MBA_COLLEGE && (!semester.mbaStartDate || !semester.mbaTotalWeeks)) throw new TRPCError({ code: "BAD_REQUEST", message: "MBA 独立周历尚未确认配置，请联系管理员；原课程及评价保留" });
-}
 
 function requireCourseTeacher(course: { teacher?: string | null }) {
   if (course.teacher === null || (typeof course.teacher === "string" && !course.teacher.trim())) throw new TRPCError({ code: "BAD_REQUEST", message: "原课表尚缺授课教师，请联系管理员核实后再安排听课或评分" });
@@ -194,14 +190,13 @@ async function validateEvaluation(data: z.infer<typeof evaluationSchema>, course
   requireCourseTeacher(course);
   const semester = await getActiveSemester();
   if (!semester) throw new TRPCError({ code: "BAD_REQUEST", message: "请先配置当前学期" });
-  requireMbaCalendar(semester, course);
   const calendar = courseCalendar(semester, course.college);
   if (data.status === "submitted") {
     const errors = submissionErrors(data);
     if (errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("；") });
   }
   let week = data.actualWeek;
-  if (Array.isArray(course.weekNumbers) && course.weekNumbers.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "课程尚无有效排课周次，请联系管理员核查原课表" });
+  if (Array.isArray(course.weekNumbers) && !course.weekNumbers.some(w => w > 0)) throw new TRPCError({ code: "BAD_REQUEST", message: "课程仅在开学前或尚无有效教学周；正常计划与评分从第1周开始" });
   if (data.listenDate) {
     const date = data.listenDate;
     const parsedDate = new Date(`${date}T00:00:00Z`);
@@ -287,7 +282,7 @@ export const appRouter = router({
           college: z.string().optional(),
           campus: z.string().optional(),
           weekday: z.string().optional(),
-          week: z.number().optional(),
+          week: z.number().int().min(0).max(30).optional(),
           teacher: z.string().optional(),
           courseName: z.string().optional(),
           page: z.number().default(1),
@@ -341,9 +336,8 @@ export const appRouter = router({
         ensureCourseInScope(ctx.user!, course);
         const activeSemester = await getActiveSemester();
         await requireCurrentSemester(course.semesterId);
-        requireMbaCalendar(activeSemester!, course);
         requireCourseTeacher(course);
-        if (Array.isArray(course.weekNumbers) && course.weekNumbers.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "课程尚无有效排课周次，请联系管理员核查原课表" });
+        if (Array.isArray(course.weekNumbers) && !course.weekNumbers.some(w => w > 0)) throw new TRPCError({ code: "BAD_REQUEST", message: "课程仅在开学前或尚无有效教学周；正常计划从第1周开始" });
         if (input.planWeek != null && (!Number.isInteger(input.planWeek) || input.planWeek < 1 || input.planWeek > courseCalendar(activeSemester!, course.college).totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek)))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
         return createListeningPlan({
           supervisorId: ctx.user!.id,
@@ -383,10 +377,9 @@ export const appRouter = router({
         ensureCourseInScope(ctx.user!, course);
         await requireCurrentSemester(plan.semesterId);
         const semester = await getActiveSemester();
-        requireMbaCalendar(semester!, course);
         requireCourseTeacher(course);
         if (plan.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "只有待听课计划可以修改" });
-        if ((Array.isArray(course.weekNumbers) && !course.weekNumbers.length) || (input.planWeek != null && (input.planWeek > courseCalendar(semester!, course.college).totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek))))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
+        if ((Array.isArray(course.weekNumbers) && !course.weekNumbers.some(w => w > 0)) || (input.planWeek != null && (input.planWeek > courseCalendar(semester!, course.college).totalWeeks || (course.weekNumbers?.length && !course.weekNumbers.includes(input.planWeek))))) throw new TRPCError({ code: "BAD_REQUEST", message: "计划周次不在课程排课范围内" });
         try { await updateListeningPlan(input.planId, { planWeek: input.planWeek, note: input.note }); }
         catch (error) { const message = error instanceof Error ? error.message : ""; throw new TRPCError({ code: "BAD_REQUEST", message: /只有尚未关联|该周已有|历史档案只读/.test(message) ? message : "计划未修改，请刷新后重试" }); }
         return { success: true };
@@ -792,7 +785,7 @@ export const appRouter = router({
         const { id, ...rest } = input;
         await requireCurrentSemester(id);
         try { await updateSemester(id, rest); }
-        catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error && /已有 MBA|历史学期档案只读|MBA 周历须/.test(error.message) ? error.message : "学期配置未更新，请核查后重试" }); }
+        catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error && /已有.*课表|历史学期档案只读|MBA|校历/.test(error.message) ? error.message : "学期配置未更新，请核查后重试" }); }
         return { success: true };
       }),
 

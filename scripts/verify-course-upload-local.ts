@@ -37,7 +37,7 @@ try {
   assert((await once(tests, "exit"))[0] === 0, "独立空库真实数据库集成测试通过");
   for (const table of tables) await root.query(`TRUNCATE TABLE \`${database}\`.\`${table}\``);
   for (const [id, role] of [[1,"admin"],[2,"admin"],[3,"college_secretary"]] as const) await root.query(`INSERT INTO \`${database}\`.users (id,openId,employeeId,name,role,college) VALUES (?, ?, ?, ?, ?, '工商管理学院')`, [id,`upload-${id}`,`upload-${id}`,`虚构导入验收${id}`,role]);
-  await root.query(`INSERT INTO \`${database}\`.semesters (id,academicYear,name,startDate,totalWeeks,mbaStartDate,mbaTotalWeeks,isActive) VALUES (1,'2026-2027','第一学期','2026-09-14',18,'2026-09-07',18,1),(2,'2025-2026','第二学期','2026-03-02',19,NULL,NULL,0)`);
+  await root.query(`INSERT INTO \`${database}\`.semesters (id,academicYear,name,startDate,totalWeeks,mbaStartDate,mbaTotalWeeks,isActive) VALUES (1,'2026-2027','第一学期','2026-09-14',18,NULL,NULL,1),(2,'2025-2026','第二学期','2026-03-02',19,NULL,NULL,0)`);
   await root.query(`INSERT INTO \`${database}\`.courses (semesterId,academicYear,semester,college,courseName) VALUES (2,'2025-2026','第二学期','工商管理学院','虚构历史保留课'),(1,'2026-2027','第一学期','工商管理学院','虚构未上传保留课')`);
   child = spawn(process.execPath,["dist/index.js"],{ env: { ...process.env, DATABASE_URL:url, JWT_SECRET:randomBytes(48).toString("hex"), NODE_ENV:"production", DOTENV_CONFIG_PATH:"/dev/null", APP_HOST:"127.0.0.1", PORT:"3107", DISABLE_SCHEDULER:"1", OAUTH_SERVER_URL:"", BUILT_IN_FORGE_API_URL:"", BUILT_IN_FORGE_API_KEY:"" }, stdio:"ignore" });
   for (let i=0;i<100;i++) { try { if ((await fetch(`${base}/api/health`)).ok) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
@@ -50,7 +50,7 @@ try {
   const cookies: string[] = [];
   for (let i=1;i<=3;i++) { const login=await call("auth.loginByEmployeeId",{employeeId:`upload-${i}`,password:`upload-${i}`},"",true); await call("auth.changePassword",{oldPassword:`upload-${i}`,newPassword:"Upload-local-test-2026"},login.cookie,true); cookies[i]=(await call("auth.loginByEmployeeId",{employeeId:`upload-${i}`,password:"Upload-local-test-2026"},"",true)).cookie; }
   assert((await upload(0,"preview",cookies[3])).status===403,"秘书无上传权限");
-  const parsed = files.map((file,index)=>parseCourseWorkbook(fs.readFileSync(file),{semesterStartDate:index===1?"2026-09-07":"2026-09-14",totalWeeks:18}));
+  const parsed = files.map((file,index)=>parseCourseWorkbook(fs.readFileSync(file),{semesterStartDate:"2026-09-14",totalWeeks:18}));
   assert(parsed[0].format==="standard"&&parsed[1].format==="mba","真实文件使用现有两种解析器");
   const merged=mergeDuplicateCourses(parsed.flatMap(p=>p.courses)).merged;
   assert(weekOfDate("2026-09-14","2026-09-14")===1&&weekOfDate("2026-09-20","2026-09-14")===1&&weekOfDate("2026-09-21","2026-09-14")===2,"9月14日为第一周及周边界正确");
@@ -62,10 +62,10 @@ try {
   const mbaPreview = await upload(1,"preview",cookies[1]);
   assert(mbaPreview.status===200&&await snapshot()===before,"真实MBA核查明细预览不写库");
   assert(JSON.stringify(mbaPreview.data.summary.issues)===JSON.stringify(parsed[1].issues)&&mbaPreview.data.summary.sheetName===parsed[1].sheetName,"MBA预览原工作表、日期和物理行号与解析器一致");
-  assert(mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="outside_weeks").length===0&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="missing_teacher").length===4&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="no_weeks").length===0,"MBA9月12、13日属于第一周，无第0周；仅保留4场原缺教师核查项");
+  assert(mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="outside_weeks").length===0&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="missing_teacher").length===4&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="no_weeks").length===0&&mbaPreview.data.summary.issues.filter((issue:any)=>issue.kind==="pre_semester").length===45,"MBA45场开学前课程为第0周，4场原缺教师保留");
   const changedCalendar = await call("semesters.update", { id: 1, mbaStartDate: "2026-09-14", mbaTotalWeeks: 18 }, cookies[1], true);
   assert(changedCalendar.status===200&&(await upload(1,"apply",cookies[1],mbaPreview.data.previewToken)).status===400&&await snapshot()===before,"MBA周历变化使旧预览失效且不写课表");
-  assert((await call("semesters.update", { id:1, mbaStartDate:"2026-09-07", mbaTotalWeeks:18 },cookies[1],true)).status===200,"尚无MBA课表时可恢复已确认周历");
+  assert((await call("semesters.update", { id:1, mbaStartDate:"2026-09-14", mbaTotalWeeks:18 },cookies[1],true)).status===200,"尚无课表时允许保存与全校一致的兼容字段");
   assert((await upload(0,"apply",cookies[2],preview.data.previewToken)).status===400,"换账号旧预览失效");
   assert((await upload(0,"apply",cookies[1],preview.data.previewToken,{},Buffer.concat([fs.readFileSync(files[0]),Buffer.from("changed")]))).status===400,"文件变化旧预览失效");
   assert((await upload(0,"apply",cookies[1],preview.data.previewToken,{semesterId:"2"})).status===400,"历史学期拒绝导入");
@@ -85,21 +85,26 @@ try {
   const [counts]=await root.query<any[]>(`SELECT semesterId,COUNT(*) n FROM \`${database}\`.courses GROUP BY semesterId`);
   assert(Number(counts.find(r=>r.semesterId===1).n)===merged.length+1&&Number(counts.find(r=>r.semesterId===2).n)===1,"两类合计与解析一致，历史和未上传课程保留");
   const stable=await snapshot();
-  const unsafeChange=await call("semesters.update",{id:1,mbaStartDate:"2026-09-14",mbaTotalWeeks:18},cookies[1],true);
+  const unsafeChange=await call("semesters.update",{id:1,mbaStartDate:"2026-09-07",mbaTotalWeeks:18},cookies[1],true);
   assert(unsafeChange.status===400&&await snapshot()===stable,"已有MBA课程时拒绝直接改变周历，课程保持原样");
   await root.query(`UPDATE \`${database}\`.users SET extraRoles='["supervisor_expert"]' WHERE id=1`);
-  const [firstWeek]=await root.query<any[]>(`SELECT id FROM \`${database}\`.courses WHERE college='MBA学院' AND JSON_CONTAINS(weekNumbers,'1') AND teacher<>'' ORDER BY id LIMIT 1`);
+  const [firstWeek]=await root.query<any[]>(`SELECT id FROM \`${database}\`.courses WHERE college='MBA学院' AND weekday='星期一' AND JSON_CONTAINS(weekNumbers,'1') AND teacher<>'' ORDER BY id LIMIT 1`);
   const firstId=firstWeek[0].id;
   const plan=await call("plans.create",{courseId:firstId,planWeek:1},cookies[1],true);
   assert(plan.status===200,"真实MBA首周课程能通过正式接口创建听课计划");
-  const draft=await call("evaluations.create",{courseId:firstId,planId:plan.data.id,listenDate:"2026-09-12",actualWeek:1,status:"draft"},cookies[1],true);
-  assert(draft.status===200,"MBA9月12日第一周评分草稿与计划一致");
-  const submitted=await call("evaluations.update",{id:draft.data.id,data:{...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key=>[key,4])),courseId:firstId,planId:plan.data.id,listenDate:"2026-09-12",actualWeek:1,status:"submitted",overallScore:4,score_research_teaching:4,highlights:"虚构MBA独立周历验收",suggestions:"虚构验收建议"}},cookies[1],true);
+  const draft=await call("evaluations.create",{courseId:firstId,planId:plan.data.id,listenDate:"2026-09-14",actualWeek:1,status:"draft"},cookies[1],true);
+  assert(draft.status===200,"MBA9月14日第一周评分草稿与计划一致");
+  const submitted=await call("evaluations.update",{id:draft.data.id,data:{...Object.fromEntries(REQUIRED_SCORE_FIELDS.map(key=>[key,4])),courseId:firstId,planId:plan.data.id,listenDate:"2026-09-14",actualWeek:1,status:"submitted",overallScore:4,score_research_teaching:4,highlights:"虚构MBA统一校历验收",suggestions:"虚构验收建议"}},cookies[1],true);
   assert(submitted.status===200,"MBA首周草稿可完整正式提交");
   assert((await call("evaluations.getById",draft.data.id,cookies[1])).status===200&&(await fetch(`${base}/api/print/evaluation/${draft.data.id}`,{headers:{cookie:cookies[1]}})).status===200,"MBA首周本人详情与打印接口可用");
   const [missingTeachers]=await root.query<any[]>(`SELECT id FROM \`${database}\`.courses WHERE college='MBA学院' AND (teacher IS NULL OR teacher='') LIMIT 1`);
   assert(missingTeachers.length>0&&(await call("plans.create",{courseId:missingTeachers[0].id,planWeek:1},cookies[1],true)).status===400,"原缺教师课程保留但暂不能安排听课");
   assert((await call("evaluations.create",{courseId:missingTeachers[0].id,actualWeek:1,status:"draft"},cookies[1],true)).status===400,"原缺教师课程不能绕过计划直接评分");
+  const zero = await call("courses.list",{semesterId:1,college:"MBA学院",week:0,pageSize:1000},cookies[1]);
+  assert(zero.status===200&&zero.data.total>0&&zero.data.data.every((c:any)=>c.weekNumbers.includes(0)),"第0周HTTP筛选只返回开学前课程");
+  const [onlyZero]=await root.query<any[]>(`SELECT id FROM \`${database}\`.courses WHERE college='MBA学院' AND JSON_LENGTH(weekNumbers)=1 AND JSON_CONTAINS(weekNumbers,'0') AND teacher<>'' LIMIT 1`);
+  assert(onlyZero.length>0&&(await call("plans.create",{courseId:onlyZero[0].id},cookies[1],true)).status===400,"不指定周次也不能将仅开学前课程加入正常计划");
+  assert((await call("evaluations.create",{courseId:onlyZero[0].id,status:"draft"},cookies[1],true)).status===400,"仅开学前课程不能绕过日期直接创建正常评分");
   const wrong=await call("evaluations.create",{courseId:firstId,listenDate:"2026-09-12",actualWeek:2,status:"draft"},cookies[1],true);
   assert(wrong.status===400,"MBA错误日期周次组合被拒绝");
   // 独立周历业务记录仅留在本次验收库，随后冲突测试使用另两门课程。
@@ -118,7 +123,7 @@ try {
   assert(stats.status===200&&stats.data.totalCourses===merged.length+1,"HTTP统计与真实课程总数一致");
   const integrationTests = Number(testOutput.match(/Tests\s+(\d+) passed/)?.[1] || 0);
   assert(integrationTests>0,"记录实际数据库测试通过数，不沿用旧固定数量");
-  const report={database,passed,parsedCourses:merged.length,colleges:new Set(merged.map(c=>c.college)).size,sources:parsed.map((p,i)=>({file:files[i],sha256:createHash("sha256").update(fs.readFileSync(files[i])).digest("hex"),format:p.format,sourceRows:p.sourceRows,parsed:p.courses.length,warnings:p.warnings,issueCounts:Object.fromEntries(["outside_weeks","missing_teacher","no_weeks","invalid_date","missing_course"].map(kind=>[kind,p.issues.filter(issue=>issue.kind===kind).length]))})),integrationTests,result:"PASS"};
+  const report={database,passed,parsedCourses:merged.length,colleges:new Set(merged.map(c=>c.college)).size,sources:parsed.map((p,i)=>({file:files[i],sha256:createHash("sha256").update(fs.readFileSync(files[i])).digest("hex"),format:p.format,sourceRows:p.sourceRows,parsed:p.courses.length,warnings:p.warnings,issueCounts:Object.fromEntries(["pre_semester","outside_weeks","missing_teacher","no_weeks","invalid_date","missing_course"].map(kind=>[kind,p.issues.filter(issue=>issue.kind===kind).length]))})),integrationTests,result:"PASS"};
   fs.mkdirSync("tmp/acceptance",{recursive:true}); fs.writeFileSync("tmp/acceptance/upload-report.json",JSON.stringify(report,null,2)); console.log(JSON.stringify(report,null,2));
 } catch (e) { console.error(`验收未完成：${e instanceof Error && !('sql' in e) ? e.message : '数据库故障（未输出SQL或凭据）'}`); process.exitCode=1; }
 finally { if(child){child.kill("SIGTERM");await once(child,"exit");} await root.query(`DROP USER IF EXISTS '${account}'@'127.0.0.1'`); await root.end(); }

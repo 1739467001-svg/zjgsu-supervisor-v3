@@ -1,5 +1,5 @@
 export type CourseImportIssue = {
-  kind: "missing_course" | "missing_teacher" | "invalid_date" | "outside_weeks" | "no_weeks";
+  kind: "missing_course" | "missing_teacher" | "invalid_date" | "outside_weeks" | "no_weeks" | "pre_semester";
   sourceRow: number;
   courseName: string;
   classId: string;

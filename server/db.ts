@@ -23,8 +23,7 @@ import { hashPassword, isAccountDisabled, isPasswordResetRequired } from "./pass
 import { randomBytes } from "node:crypto";
 import { getScopedCollege, hasAnyRole, isCollegeInScope } from "../shared/roles";
 import { buildSemesterCollegeRows } from "../shared/semesterStats";
-import { MBA_COLLEGE, normalizeCourseCollege } from "../shared/colleges";
-import { validateMbaCalendar } from "../shared/courseCalendar";
+import { validateUnifiedCalendar } from "../shared/courseCalendar";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: any = null;
@@ -280,7 +279,7 @@ export async function getSemesterById(id: number) {
 }
 
 export async function createSemester(data: InsertSemester) {
-  validateMbaCalendar(data);
+  validateUnifiedCalendar({ ...data, totalWeeks: data.totalWeeks ?? 19 });
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
@@ -326,11 +325,13 @@ export async function updateSemester(id: number, data: Partial<InsertSemester>) 
   await db.transaction(async tx => {
     const [current] = await tx.select().from(semesters).where(eq(semesters.id, id)).for("update");
     if (!current?.isActive) throw new Error("历史学期档案只读，或当前学期已变化，请刷新后核实");
-    validateMbaCalendar({ ...current, ...rest });
+    validateUnifiedCalendar({ ...current, ...rest });
     const changingMba = (rest.mbaStartDate !== undefined && rest.mbaStartDate !== current.mbaStartDate) || (rest.mbaTotalWeeks !== undefined && rest.mbaTotalWeeks !== current.mbaTotalWeeks);
-    if (changingMba) {
+    const changingSchool = (rest.startDate !== undefined && rest.startDate !== current.startDate) || (rest.totalWeeks !== undefined && rest.totalWeeks !== current.totalWeeks);
+    const replacingLegacyMba = changingMba && ((current.mbaStartDate != null && current.mbaStartDate !== current.startDate) || (current.mbaTotalWeeks != null && current.mbaTotalWeeks !== current.totalWeeks));
+    if (replacingLegacyMba || changingSchool) {
       const existing = await tx.select({ college: courses.college }).from(courses).where(eq(courses.semesterId, id)).for("update");
-      if (existing.some(c => normalizeCourseCollege(c.college ?? "") === MBA_COLLEGE)) throw new Error("已有 MBA 课表，不能直接改变周历；请先完成独立迁移演练，避免计划与评价周次错位");
+      if (existing.length) throw new Error("已有课表，不能直接改变校历；请先完成独立迁移演练，避免计划与评价周次错位");
     }
     await tx.update(semesters).set(rest).where(and(eq(semesters.id, id), eq(semesters.isActive, true)));
   });
@@ -378,7 +379,7 @@ export async function getCourses(filters: {
   if (filters.weekday && filters.weekday.trim()) conditions.push(eq(courses.weekday, filters.weekday.trim()));
   if (filters.teacher && filters.teacher.trim()) conditions.push(like(courses.teacher, `%${filters.teacher.trim()}%`));
   if (filters.courseName && filters.courseName.trim()) conditions.push(like(courses.courseName, `%${filters.courseName.trim()}%`));
-  if (filters.week && filters.week > 0) {
+  if (filters.week !== undefined && filters.week >= 0) {
     // 使用JSON_CONTAINS查询包含特定周次的课程（weekNumbers是JSON数组如[1,2,3,4,5]）
     conditions.push(sql`JSON_CONTAINS(${courses.weekNumbers}, CAST(${filters.week} AS JSON))`);
   }

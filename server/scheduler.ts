@@ -12,7 +12,6 @@
 import { getDb, getActiveSemester } from "./db";
 import { calculateWeekFromDate, type SemesterConfig } from "../shared/dateUtils";
 import { courseCalendar } from "../shared/courseCalendar";
-import { MBA_COLLEGE, normalizeCourseCollege } from "../shared/colleges";
 import { listeningPlans, courses, notifications } from "../drizzle/schema";
 import { eq, and } from "drizzle-orm";
 
@@ -33,7 +32,6 @@ export function getSemesterInfo(date: Date, semester: SemesterConfig): { week: n
 }
 
 export function getReminderInfo(date: Date, semester: SemesterConfig & { mbaStartDate?: string | null; mbaTotalWeeks?: number | null }, college: string | null, planWeek: number | null) {
-  if (normalizeCourseCollege(college ?? "") === MBA_COLLEGE && (!semester.mbaStartDate || !semester.mbaTotalWeeks)) return null;
   const info = getSemesterInfo(date, courseCalendar(semester, college));
   return info && info.week === planWeek ? info : null;
 }
